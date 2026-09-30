@@ -88,7 +88,8 @@ int video_present_is_bgra(void);
 void video_set_show_stats(int enable);
 /* BGRA pipeline: kick convert async; finish = join + flip. Decode always separate. */
 int video_present_bgra_pipe_kick(const uint8_t *y, const uint8_t *uv,
-                                 int pitch_y, int pitch_uv, int w, int h);
+                                 int pitch_y, int pitch_uv, int w, int h,
+                                 uint32_t frame_wait_limit_us);
 int video_present_bgra_pipe_finish(void);
 int video_present_frame(const uint8_t *y, const uint8_t *u, const uint8_t *v,
                         int pitch_y, int pitch_uv, int w, int h,

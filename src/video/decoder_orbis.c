@@ -1,5 +1,6 @@
 // Hardware H.264 decoder (libSceVideodec2) + YCbCr/NV12 presentation.
 #include "video.h"
+#include "present_policy.h"
 #include "nv12_blit.h"
 #include "../log.h"
 #include "../orbis/videodec2.h"
@@ -517,6 +518,7 @@ static int dr_setup(int videoFormat, int width, int height, int redrawRate,
     s_width = width;
     s_height = height;
     s_err_streak = 0;
+
     s_submits = 0;
     s_diag_start = s_diag_total = s_diag_assembly = s_diag_queue = 0;
     s_diag_flush = s_diag_finish = 0;
@@ -712,6 +714,14 @@ static int dr_submit_impl(PDECODE_UNIT du) {
 
     s_err_streak = 0;
 
+    /* Keep H.264 reference decoding intact, but recheck freshness after
+     * Decode: a frame may age while the hardware callback is running. */
+    uint64_t after_decode=LiGetMicroseconds();
+    if(!skip_present&&du->enqueueTimeUs&&after_decode>=du->enqueueTimeUs&&
+       after_decode-du->enqueueTimeUs>33000) {
+        skip_present=1;s_diag_queue_drops++;
+    }
+
     /*
      * Decode already ran (possible overlap with prior frame convert).
      * If no FB: still finish the pending one (free/present) and drop.
@@ -794,8 +804,16 @@ static int dr_submit_impl(PDECODE_UNIT du) {
         (void)video_present_bgra_pipe_finish();
         s_diag_finish += now_us() - finish_start;
         const uint8_t *uv = src + (size_t)pitch_y * (size_t)h;
-        (void)video_present_bgra_pipe_kick(src, uv, pitch_y, pitch_uv,
-                                           disp_w, disp_h);
+        uint64_t kick_now=LiGetMicroseconds();
+        uint64_t age=du->enqueueTimeUs&&kick_now>=du->enqueueTimeUs?
+                     kick_now-du->enqueueTimeUs:0;
+        uint32_t wait_limit=ml_present_wait_budget(age,8000);
+        if(wait_limit) {
+            (void)video_present_bgra_pipe_kick(src,uv,pitch_y,pitch_uv,
+                                               disp_w,disp_h,wait_limit);
+        } else {
+            s_diag_queue_drops++;video_stats_add(0,0,0,1);
+        }
         if (dst_bounce)
             s_bounce_i ^= 1;
     } else {

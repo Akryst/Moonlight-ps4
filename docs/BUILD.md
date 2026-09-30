@@ -1,6 +1,6 @@
 # Build Moonlight PS4
 
-Run commands from the repository root. The current package version is 01.33.
+Run commands from the repository root. The current package version is 01.34.
 
 ## Windows with Ubuntu WSL
 
@@ -16,7 +16,7 @@ Build and export the package (local host tests run if present):
 wsl -d Ubuntu -- bash scripts/build_from_windows.sh
 ```
 
-Output: `dist/Moonlight-PS4-01.33-test.pkg` and `dist/SHA256SUMS`.
+Output: `dist/Moonlight-PS4-01.34-test.pkg` and `dist/SHA256SUMS`.
 The script mirrors source to `~/ps4dev/moonlight-client` to keep dependencies
 and build outputs on the Linux filesystem. At the repository root, `build.bat`
 invokes the same build.
@@ -31,7 +31,7 @@ if [ -f tests/run_host_tests.sh ]; then bash tests/run_host_tests.sh; fi
 bash scripts/build_pkg.sh
 ```
 
-Output: `build-ps4/Moonlight-01.33.pkg`.
+Output: `build-ps4/Moonlight-01.34.pkg`.
 The scripts prepare OpenOrbis 0.5.4, host LLVM/Clang tools and PS4 FFmpeg.
 Dependencies are pinned in `third_party/DEPS`; local PS4 changes are reapplied
 from `patches/`. Do not commit patched dependency working trees into submodules.
@@ -57,7 +57,7 @@ python3 scripts/analyze_stream_log.py debug.log --output report.json
 
 Compilation and host tests do not establish console performance. A fresh-clone
 build on a clean environment, real PS4 screenshots, license/redistribution review
-and console validation of 01.33 remain necessary before a public release.
+and console validation of 01.34 remain necessary before a public release.
 
 The supplied reference was based on upstream commit
 `61427a214d4e632ee246816a98ee4f2374844a73`.

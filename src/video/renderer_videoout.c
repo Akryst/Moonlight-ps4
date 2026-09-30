@@ -1,6 +1,7 @@
 // sceVideoOut presentation: YCbCr420_BT709 / NV12 (BGRA only if prefer_ycbcr=0).
 #include "video.h"
 #include "nv12_blit.h"
+#include "present_policy.h"
 #include "../log.h"
 #include "../orbis/video_out_c.h"
 #include "../ui/ui_draw.h"
@@ -88,13 +89,68 @@ static int s_bgra_nt;         /* resolved: 1 = streaming stores */
 static int s_pipe_active;
 static int s_pipe_fb_idx = -1;
 static uint64_t s_slot_wait_budget_us=4000;
+static uint64_t now_us(void);
+static OrbisKernelEqueue s_flip_queue;
+static int s_flip_queue_ready;
+static int s_flip_queue_attempted;
+static uint64_t s_fb_submit_us[FB_COUNT_MAX];
+static uint64_t s_observed_flip_num;
+static int s_observed_flip_valid;
 static struct {
     unsigned samples,waits,no_slot,submit_fail;
     uint64_t wait_total_us,wait_max_us;
+    unsigned events,timeouts,event_errors,status_errors,shown_samples,pending_max;
+    uint64_t shown_total_us,shown_max_us;
 } s_present_diag;
+static void flip_events_close(void) {
+    if(s_flip_queue_ready)(void)sceKernelDeleteEqueue(s_flip_queue);
+    s_flip_queue_ready=0;s_flip_queue_attempted=0;s_flip_queue=0;
+}
+static void flip_events_start(void) {
+    if(s_flip_queue_attempted||s_video<0)return;
+    s_flip_queue_attempted=1;
+    int32_t rc=sceKernelCreateEqueue(&s_flip_queue,"moonlight-flips");
+    if(rc==0) {
+        rc=sceVideoOutAddFlipEvent(s_flip_queue,s_video,NULL);
+        if(rc!=0)(void)sceKernelDeleteEqueue(s_flip_queue);
+    }
+    s_flip_queue_ready=rc==0;
+    LOGI("present: flip_events=%s rc=0x%08x",s_flip_queue_ready?"enabled":"poll_fallback",(unsigned)rc);
+}
+static void wait_for_flip(uint32_t remaining_us) {
+    if(!remaining_us)return;
+    if(s_flip_queue_ready) {
+        OrbisKernelEvent event;
+        OrbisKernelUseconds timeout=remaining_us;
+        int32_t count=0;
+        int32_t rc=sceKernelWaitEqueue(s_flip_queue,&event,1,&count,&timeout);
+        if(rc==0&&count>0) {s_present_diag.events++;return;}
+        if((uint32_t)rc==0x8002003cu) {s_present_diag.timeouts++;return;}
+        s_present_diag.event_errors++;
+        LOGW("present: flip event wait failed rc=0x%08x count=%d; polling fallback",(unsigned)rc,count);
+        flip_events_close();s_flip_queue_attempted=1;
+    }
+    sceKernelUsleep(remaining_us<500?remaining_us:500);
+}
+static void observe_flip(const MlVideoOutFlipStatus *st) {
+    if(st->numFlipPending>0&&(unsigned)st->numFlipPending>s_present_diag.pending_max)
+        s_present_diag.pending_max=(unsigned)st->numFlipPending;
+    if(!s_observed_flip_valid||st->num!=s_observed_flip_num) {
+        s_observed_flip_valid=1;s_observed_flip_num=st->num;
+        int shown=st->currentBuffer;
+        if(shown>=0&&shown<s_fb_count&&s_fb_submit_us[shown]) {
+            uint64_t age=now_us()-s_fb_submit_us[shown];
+            s_present_diag.shown_samples++;s_present_diag.shown_total_us+=age;
+            if(age>s_present_diag.shown_max_us)s_present_diag.shown_max_us=age;
+            s_fb_submit_us[shown]=0;
+        }
+    }
+}
 void video_present_begin_session(int pipeline_depth) {
     s_slot_wait_budget_us=pipeline_depth>1?8000:4000;
     memset(&s_present_diag,0,sizeof(s_present_diag));
+    memset(s_fb_submit_us,0,sizeof(s_fb_submit_us));s_observed_flip_valid=0;
+    flip_events_close();
     LOGI("present: frame policy slot_wait_budget=%llu us color=Rec709_limited_to_RGB_full",
          (unsigned long long)s_slot_wait_budget_us);
 }
@@ -110,6 +166,11 @@ static void present_diag_sample(uint64_t wait_us,int waited,int no_slot) {
              s_present_diag.samples,s_present_diag.waits,
              s_present_diag.waits?(double)s_present_diag.wait_total_us/s_present_diag.waits/1000.0:0.0,
              (double)s_present_diag.wait_max_us/1000.0,s_present_diag.no_slot,s_present_diag.submit_fail);
+        LOGI("present_timing shown_samples=%u observed_show_avg=%.2fms observed_show_max=%.2fms pending_max=%u events=%u timeouts=%u event_errors=%u status_errors=%u",
+             s_present_diag.shown_samples,s_present_diag.shown_samples?
+             (double)s_present_diag.shown_total_us/s_present_diag.shown_samples/1000.0:0.0,
+             (double)s_present_diag.shown_max_us/1000.0,s_present_diag.pending_max,
+             s_present_diag.events,s_present_diag.timeouts,s_present_diag.event_errors,s_present_diag.status_errors);
         memset(&s_present_diag,0,sizeof(s_present_diag));
     }
 }
@@ -379,6 +440,7 @@ static int switch_to_bgra(int w, int h) {
     (void)sceVideoOutUnregisterBuffers(s_video, 0);
     /* Unregister after YCbCr leaves the port dirty (SLOT_OCCUPIED). Reopen. */
     if (s_video >= 0) {
+        flip_events_close();
         sceVideoOutClose(s_video);
         s_video = -1;
     }
@@ -1083,6 +1145,7 @@ void video_present_shutdown(void) {
         s_pipe_fb_idx = -1;
     }
     bgra_worker_stop();
+    flip_events_close();
     nv12_blit_shutdown();
     s_flip_logged = 0;
     /* s_video / dmem / s_use_bgra / size are preserved */
@@ -1095,27 +1158,17 @@ int video_present_is_bgra(void) {
 static int pick_free_fb(int *out_shown) {
     MlVideoOutFlipStatus st0;
     memset(&st0, 0, sizeof(st0));
-    (void)sceVideoOutGetFlipStatus(s_video, &st0);
+    if(sceVideoOutGetFlipStatus(s_video,&st0)!=0) {
+        s_present_diag.status_errors++;
+        return -1;
+    }
+    observe_flip(&st0);
     int shown = st0.currentBuffer;
     if (out_shown)
         *out_shown = shown;
-    int next = -1;
-    if (s_fb_count > 1) {
-        for (int i = 0; i < s_fb_count; i++) {
-            int cand = (s_fb_index + 1 + i) % s_fb_count;
-            if (shown >= 0 && cand == shown)
-                continue;
-            if (st0.numFlipPending > 0 && cand == s_last_flip_idx)
-                continue;
-            if (s_pipe_active && cand == s_pipe_fb_idx)
-                continue;
-            next = cand;
-            break;
-        }
-    } else {
-        next = 0;
-    }
-    return next;
+    if(s_fb_count==1)return 0; /* Retain experimental single-buffer YCbCr path. */
+    return ml_present_pick_slot(s_fb_count,shown,st0.numFlipPending,
+                                s_last_flip_idx,s_pipe_active?s_pipe_fb_idx:-1,s_fb_index);
 }
 
 void video_set_show_stats(int enable) {
@@ -1214,8 +1267,10 @@ static void present_submit_flip(int next, uint8_t *dst, uint64_t convert_us) {
     uint64_t t1 = now_us();
     int32_t flip_rc = sceVideoOutSubmitFlip(s_video, next, (uint32_t)s_flip_mode, 0);
     if(flip_rc!=0)s_present_diag.submit_fail++;
-    s_fb_index = next;
-    s_last_flip_idx = next;
+    if(flip_rc==0) {
+        s_fb_submit_us[next]=t1;
+        s_fb_index=next;s_last_flip_idx=next;
+    }
 
     int shown_ok = 1;
     if (!s_use_bgra && s_fb_count > 1 && flip_rc == 0)
@@ -1291,7 +1346,8 @@ int video_present_bgra_pipe_finish(void) {
 }
 
 int video_present_bgra_pipe_kick(const uint8_t *y, const uint8_t *uv,
-                                 int pitch_y, int pitch_uv, int w, int h) {
+                                 int pitch_y, int pitch_uv, int w, int h,
+                                 uint32_t frame_wait_limit_us) {
     if (s_video < 0 || !y || !s_use_bgra || s_fb_count < 1)
         return -1;
     if (s_pipe_active)
@@ -1302,16 +1358,18 @@ int video_present_bgra_pipe_kick(const uint8_t *y, const uint8_t *uv,
      * than dropping immediately. Never write into shown/pending buffers.
      * Balanced mode waits up to 8 ms; low-latency retains the 4 ms policy.
      * Scheduling may overshoot a sleep; no occupied buffer is ever reused. */
+    flip_events_start();
     const uint64_t slot_start=now_us();
-    const uint64_t slot_deadline = slot_start + s_slot_wait_budget_us;
+    uint64_t budget=s_slot_wait_budget_us<frame_wait_limit_us?
+                    s_slot_wait_budget_us:frame_wait_limit_us;
+    const uint64_t slot_deadline=slot_start+budget;
     int next = -1;
     int waited=0;
     for (;;) {
-        if (!video_present_should_drop())
-            next = pick_free_fb(NULL);
-        if (next >= 0 || now_us() >= slot_deadline)
-            break;
-        waited=1;sceKernelUsleep(500);
+        next=pick_free_fb(NULL);
+        uint32_t remaining=ml_present_remaining_us(now_us(),slot_deadline);
+        if(next>=0||!remaining)break;
+        waited=1;wait_for_flip(remaining);
     }
     present_diag_sample(now_us()-slot_start,waited,next<0);
     if (next < 0) {

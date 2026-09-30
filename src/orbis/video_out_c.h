@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <sys/types.h>
+#include <orbis/_types/kernel.h>
 
 #define ML_VIDEO_USER_MAIN              0xFF
 #define ML_VIDEO_OUT_BUS_MAIN           0
@@ -58,6 +59,11 @@ void sceVideoOutSetBufferAttribute(void *attr, uint32_t pixelFormat, uint32_t ti
                                    uint32_t pitchInPixel);
 int32_t sceVideoOutSetFlipRate(int32_t handle, int32_t flipRate);
 int32_t sceVideoOutGetFlipStatus(int32_t handle, MlVideoOutFlipStatus *status);
+int32_t sceVideoOutAddFlipEvent(OrbisKernelEqueue eq,int32_t handle,void *data);
+int32_t sceKernelCreateEqueue(OrbisKernelEqueue *eq,const char *name);
+int32_t sceKernelDeleteEqueue(OrbisKernelEqueue eq);
+int32_t sceKernelWaitEqueue(OrbisKernelEqueue eq,OrbisKernelEvent *events,
+                           int32_t capacity,int32_t *count,OrbisKernelUseconds *timeout);
 /* Do NOT declare AddBufferYccPrivilege / SysUpdatePrivilege here: the
  * OpenOrbis stub is `jmp .` (infinite hang). Resolve via Dlsym from the real SPRX. */
 

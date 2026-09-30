@@ -2,11 +2,11 @@
 
 # Moonlight PS4
 
-### Release 01.33 · Experimental
+### Release 01.34 · Experimental
 
 Stream your PC games to a jailbroken PS4 with Sunshine and a DualShock 4.
 
-![Version](https://img.shields.io/badge/release-01.33-36CADB?style=flat-square&labelColor=172B40)
+![Version](https://img.shields.io/badge/release-01.34-36CADB?style=flat-square&labelColor=172B40)
 ![Platform](https://img.shields.io/badge/tested-PS4%20%2F%209.00%20%2F%20GoldHEN-0B1525?style=flat-square&labelColor=172B40)
 ![Target](https://img.shields.io/badge/target-1080p60-36CADB?style=flat-square&labelColor=172B40)
 
@@ -14,7 +14,9 @@ Stream your PC games to a jailbroken PS4 with Sunshine and a DualShock 4.
 
 <sub>Captured on an original PS4 running firmware 9.00 with GoldHEN · Midnight theme · Client 01.33.</sub>
 
-**[What's new](#whats-new-in-0133)** · **[Install](#installation)** · **[Controls](#controls)** · **[Known issues](#known-issues)**
+**[What's new](#whats-new-in-0134)** · **[Install](#installation)** · **[Controls](#controls)** · **[Known issues](#known-issues)**
+
+**[Download PKG](https://github.com/Akryst/Moonlight-ps4/releases/download/v1.3.4/Moonlight-PS4-01.34-test.pkg)** · **[Release notes & checksums](https://github.com/Akryst/Moonlight-ps4/releases/tag/v1.3.4)**
 
 </div>
 
@@ -22,11 +24,13 @@ Stream your PC games to a jailbroken PS4 with Sunshine and a DualShock 4.
 > affiliated with, endorsed by, or maintained by the official Moonlight project.
 > Product names belong to their respective owners.
 
-## What's new in 01.33
+## What's new in 01.34
 
-- Replaced the crescent splash mark with Moonlight's eight-segment logo in all five themes.
-- Retains the Rec.709 color correction, Balanced presentation policy and
-  presentation-queue diagnostics introduced in 01.32.
+- Event-driven buffer waits, with bounded polling fallback if flip events fail.
+- Safer buffer selection from a single VideoOut status snapshot.
+- Rechecks decoded-frame freshness and limits waiting for already delayed frames.
+- New diagnostics for pending flips and observed submit-to-display delay.
+- Retains the Moonlight logo, five themes and Rec.709 color correction.
 
 The package compiles and host tests pass. The new presentation policy still
 needs validation on PS4; it may add latency under contention.
@@ -61,13 +65,14 @@ an actual PS4 screenshot. Game artwork belongs to its respective owners.</sub>
 Ethernet-connected PC running [Sunshine](https://github.com/LizardByte/Sunshine).
 The Windows test host uses ViGEmBus for controller emulation.
 
-- **Package:** `Moonlight-PS4-01.33-test.pkg`
+- **Package:** `Moonlight-PS4-01.34-test.pkg`
 - **Title ID:** `MLNT00001`
 - **Settings:** `/data/moonlight`
 
-No public download has been published for this fork yet. Build instructions
-are in [docs/BUILD.md](docs/BUILD.md); Windows builds export the PKG and a
-SHA256 manifest to `dist/`.
+Download the PKG and `SHA256SUMS` from the
+[01.34 experimental release](https://github.com/Akryst/Moonlight-ps4/releases/tag/v1.3.4).
+The release also includes the optional Windows Steam companion. Build from
+source using [docs/BUILD.md](docs/BUILD.md).
 
 1. Install the PKG with GoldHEN's Package Installer. It updates an existing
    client using the same title ID and retains its saved settings.
@@ -99,7 +104,10 @@ The physical PS button opens the PS4 system menu. Use the Guide shortcut for Ste
 - **Locked 60 FPS is not guaranteed.** An earlier ETS2 Desktop-stream sample
   averaged 58.5 client-reported FPS over about 8.5 minutes, with the final
   minutes near 59.9 FPS. Sunshine captured at 59.94 Hz.
-- The 01.33 color correction and presentation changes need console comparison.
+- A 01.33 Stellar Blade sample averaged 59.0 client-reported FPS over 217 seconds,
+  with 33 local buffer-starvation drops. This is the baseline for testing 01.34,
+  not a measurement of the new release's performance.
+- The 01.34 presentation changes need console comparison.
   The reported sharpening appearance has not been conclusively diagnosed.
 - Compatibility beyond the original PS4 / firmware 9.00 setup is unverified.
 - Discovery currently covers local IPv4; use manual IP if multicast is unavailable.
@@ -108,6 +116,7 @@ The physical PS button opens the PS4 system menu. Use the Guide shortcut for Ste
   catalog rather than scanning Steam directly.
 
 Detailed measurements and the next test procedure:
+[Stellar Blade presentation test](docs/PRESENTATION_01_34.md) and
 [ETS2 performance analysis](docs/ETS2_01_32.md).
 Experimental YCbCr plugins are outside the standard installation.
 
@@ -127,5 +136,5 @@ FFmpeg, Opus and mbedTLS. Dependency pins: [third_party/DEPS](third_party/DEPS).
 Font notices: [vendor/FONT-LICENSE.txt](vendor/FONT-LICENSE.txt).
 UI asset provenance: [design/ASSETS_01_31.md](design/ASSETS_01_31.md).
 
-A top-level license and redistribution review remain pending before public
-binary distribution. Existing dependency licenses and notices apply.
+A consolidated top-level license notice remains pending. Existing dependency
+licenses and notices apply.

@@ -16,6 +16,7 @@ perf=[dict(zip(("bitrate","fps","decodes","drops","seconds"),map(float,m))) for 
 timing=[list(map(float,m)) for m in re.findall(r"decode=([\d.]+)ms convert=([\d.]+)ms \(bounce=([\d.]+) bgra=([\d.]+)\) present=([\d.]+)ms",text)]
 pipe=[list(map(float,m)) for m in re.findall(r"pipeline submit=([\d.]+)ms flush=([\d.]+)ms finish=([\d.]+)ms assembly=([\d.]+)ms queue=([\d.]+)ms frame_gaps=(\d+)",text)]
 presentation=[list(map(float,m)) for m in re.findall(r"present_queue samples=(\d+) waits=(\d+) wait_avg=([\d.]+)ms wait_max=([\d.]+)ms no_slot=(\d+) submit_fail=(\d+)",text)]
+display=[list(map(float,m)) for m in re.findall(r"present_timing shown_samples=(\d+) observed_show_avg=([\d.]+)ms observed_show_max=([\d.]+)ms pending_max=(\d+) events=(\d+) timeouts=(\d+) event_errors=(\d+) status_errors=(\d+)",text)]
 duration=sum(p["seconds"] for p in perf)
 def weighted(key):return sum(p[key]*p["seconds"] for p in perf)/duration if duration else 0
 summary={"intervals":len(perf),"duration_seconds_approx":round(duration,2),
@@ -41,5 +42,16 @@ if presentation:
                    present_no_slot_drops=int(sum(row[4] for row in presentation)),
                    present_submit_failures=int(sum(row[5] for row in presentation)))
     result["presentation_intervals"]=presentation
+if display:
+    shown=sum(row[0] for row in display)
+    summary.update(observed_show_samples=int(shown),
+                   observed_show_ms_mean=round(sum(row[0]*row[1] for row in display)/shown,3) if shown else 0,
+                   observed_show_ms_max=max(row[2] for row in display),
+                   flip_pending_max=int(max(row[3] for row in display)),
+                   flip_wait_events=int(sum(row[4] for row in display)),
+                   flip_wait_timeouts=int(sum(row[5] for row in display)),
+                   flip_event_errors=int(sum(row[6] for row in display)),
+                   flip_status_errors=int(sum(row[7] for row in display)))
+    result["display_intervals"]=display
 if args.output:args.output.write_text(json.dumps(result,indent=2)+"\n",encoding="utf-8")
 print(json.dumps(summary,indent=2))
