@@ -10,7 +10,9 @@ Stream your PC games to a jailbroken PS4 with Sunshine and a DualShock 4.
 ![Platform](https://img.shields.io/badge/tested-PS4%20%2F%209.00%20%2F%20GoldHEN-0B1525?style=flat-square&labelColor=172B40)
 ![Target](https://img.shields.io/badge/target-1080p60-36CADB?style=flat-square&labelColor=172B40)
 
-<img src="design/native-01.33/midnight-splash.png" alt="Moonlight PS4 01.33 splash with the Moonlight logo — native renderer preview" width="800">
+<img src="design/console/midnight-games-ps4-01.33.jpg" alt="Moonlight PS4 01.33 Games menu — actual PS4 screenshot" width="800">
+
+<sub>Captured on an original PS4 running firmware 9.00 with GoldHEN · Midnight theme · Client 01.33.</sub>
 
 **[What's new](#whats-new-in-0133)** · **[Install](#installation)** · **[Controls](#controls)** · **[Known issues](#known-issues)**
 
@@ -43,13 +45,15 @@ needs validation on PS4; it may add latency under contention.
 <details>
 <summary><strong>Preview the five themes</strong></summary>
 
+![Splash with the Moonlight logo — native renderer preview](design/native-01.33/midnight-splash.png)
+
 ![Themes, splash screens and settings](design/native-themes-preview-01.33.png)
 
 </details>
 
 <sub>Images are previews produced by the actual C UI renderer on a development
-PC, not PS4 captures. The previews show the 01.33 UI. Console screenshots
-are pending; game artwork belongs to its respective owners.</sub>
+PC, not PS4 captures. The previews show the 01.33 UI; the header image above is
+an actual PS4 screenshot. Game artwork belongs to its respective owners.</sub>
 
 ## Installation
 

@@ -1,5 +1,8 @@
 # Native UI artwork and typography
 
+- `console/midnight-games-ps4-01.33.jpg`: original, unedited PS4 system capture
+  retrieved through GoldHEN FTP on September 30, 2026. Original PS4, firmware
+  9.00, GoldHEN, client 01.33, Midnight theme. This is the README header image.
 - `lake-background.png`: generated with the built-in imagegen tool, then embedded
   at 1280x720 by `scripts/embed_ui_background.py`. Used for Desktop and the
   Midnight/Cinema splashes. The original generated asset is preserved here.
