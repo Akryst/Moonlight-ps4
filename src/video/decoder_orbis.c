@@ -68,11 +68,15 @@ static size_t s_cpu_sz, s_gpu_sz, s_cpugpu_sz;
 
 static unsigned s_err_streak;
 static unsigned s_submits;
+static uint64_t s_diag_start, s_diag_total, s_diag_assembly, s_diag_queue;
+static uint64_t s_diag_flush, s_diag_finish;
+static unsigned s_diag_count, s_diag_gaps;
+static unsigned s_diag_backlog_drops, s_diag_queue_drops;
+static uint64_t s_diag_host_latency;
+static unsigned s_diag_host_samples;
+static int s_diag_last_frame;
 static int s_logged_sample;
 static int s_logged_au;
-static uint64_t s_pts_base;
-static uint64_t s_time_base_us;
-static int s_have_pts_base;
 
 static uint8_t s_sps_scratch[256];
 
@@ -514,11 +518,15 @@ static int dr_setup(int videoFormat, int width, int height, int redrawRate,
     s_height = height;
     s_err_streak = 0;
     s_submits = 0;
+    s_diag_start = s_diag_total = s_diag_assembly = s_diag_queue = 0;
+    s_diag_flush = s_diag_finish = 0;
+    s_diag_count = s_diag_gaps = 0;
+    s_diag_backlog_drops = s_diag_queue_drops = 0;
+    s_diag_host_latency = 0;
+    s_diag_host_samples = 0;
+    s_diag_last_frame = 0;
     s_logged_sample = 0;
     s_logged_au = 0;
-    s_pts_base = 0;
-    s_time_base_us = 0;
-    s_have_pts_base = 0;
     video_reset_stats();
     gs_sps_init(width, height);
 
@@ -586,7 +594,7 @@ static void dr_cleanup(void) {
     memset(&s_api, 0, sizeof(s_api));
 }
 
-static int dr_submit(PDECODE_UNIT du) {
+static int dr_submit_impl(PDECODE_UNIT du) {
     if (!s_dec)
         return DR_OK;
 
@@ -598,26 +606,26 @@ static int dr_submit(PDECODE_UNIT du) {
 
     /*
      * Always Decode (H.264 chain / refs). Only skip bounce+present if the
-     * flip queue is truly backed up or PTS is late — otherwise: tearing and
+     * flip queue is truly backed up or the decoder queue is late — otherwise: tearing and
      * "low bitrate". Do NOT use video_present_should_drop() here: it counts
      * the pipelined convert as busy, and with the async pipe that is the
      * steady state (it would spuriously skip frames).
      */
     int skip_present = 0;
-    if (video_present_flip_backlogged())
+    /* BGRA checks the backlog after Decode and finishing the previous
+     * conversion, when a pending flip may already have freed a buffer. */
+    if (!video_present_is_bgra() && video_present_flip_backlogged()) {
         skip_present = 1;
-
-    if (du->presentationTimeUs) {
-        if (!s_have_pts_base) {
-            s_pts_base = du->presentationTimeUs;
-            s_time_base_us = now_us();
-            s_have_pts_base = 1;
-        } else {
-            int64_t expected = (int64_t)s_time_base_us +
-                               (int64_t)(du->presentationTimeUs - s_pts_base);
-            if ((int64_t)now_us() - expected > 33000)
-                skip_present = 1;
-        }
+        s_diag_backlog_drops++;
+    }
+    /* Host RTP time and the console clock may drift or jump. Discard only
+     * frames that actually waited too long in our decoder queue, using the
+     * same monotonic clock as Moonlight's enqueue timestamp. */
+    uint64_t queue_now = LiGetMicroseconds();
+    if (du->enqueueTimeUs && queue_now >= du->enqueueTimeUs &&
+        queue_now - du->enqueueTimeUs > 33000) {
+        skip_present = 1;
+        s_diag_queue_drops++;
     }
 
     /* Next AU slot: with depth > 1 the Vdec worker may still be parsing the
@@ -715,7 +723,9 @@ static int dr_submit(PDECODE_UNIT du) {
         return DR_OK;
     }
 
+    uint64_t flush_start = now_us();
     sceGnmFlushGarlic();
+    s_diag_flush += now_us() - flush_start;
 
     const uint8_t *src = (const uint8_t *)out.frameBuffer;
     /* If cacheable alias exists, read from there (same phys as Vdec WC). */
@@ -780,7 +790,9 @@ static int dr_submit(PDECODE_UNIT du) {
          * With the cacheable alias the workers read the decoder FB directly:
          * safe because fb_n = depth+2, so the FB being converted is not
          * handed back to Decode until after the next pipe_finish. */
+        uint64_t finish_start = now_us();
         (void)video_present_bgra_pipe_finish();
+        s_diag_finish += now_us() - finish_start;
         const uint8_t *uv = src + (size_t)pitch_y * (size_t)h;
         (void)video_present_bgra_pipe_kick(src, uv, pitch_y, pitch_uv,
                                            disp_w, disp_h);
@@ -794,6 +806,48 @@ static int dr_submit(PDECODE_UNIT du) {
         video_stats_add_bounce(tc1 - tc0);
 
     return DR_OK;
+}
+
+/* Include synchronization and GPU flushes omitted by the DEC/CONV counters.
+ * Receive timestamps use Moonlight's clock, not sceKernelGetProcessTime(). */
+static int dr_submit(PDECODE_UNIT du) {
+    uint64_t start = now_us();
+    uint64_t arrival = LiGetMicroseconds();
+    if (!s_diag_start) s_diag_start = start;
+    if (du->enqueueTimeUs >= du->receiveTimeUs)
+        s_diag_assembly += du->enqueueTimeUs - du->receiveTimeUs;
+    if (arrival >= du->enqueueTimeUs)
+        s_diag_queue += arrival - du->enqueueTimeUs;
+    if (s_diag_last_frame && du->frameNumber > s_diag_last_frame + 1)
+        s_diag_gaps += (unsigned)(du->frameNumber - s_diag_last_frame - 1);
+    s_diag_last_frame = du->frameNumber;
+    if (du->frameHostProcessingLatency) {
+        s_diag_host_latency += du->frameHostProcessingLatency;
+        s_diag_host_samples++;
+    }
+    int result = dr_submit_impl(du);
+    uint64_t end = now_us();
+    s_diag_total += end - start;
+    s_diag_count++;
+    if (end - s_diag_start >= 1000000) {
+        double divisor = (double)s_diag_count * 1000.0;
+        LOGI("pipeline submit=%.2fms flush=%.2fms finish=%.2fms assembly=%.2fms queue=%.2fms frame_gaps=%u last_frame=%d samples=%u",
+             s_diag_total / divisor, s_diag_flush / divisor,
+             s_diag_finish / divisor, s_diag_assembly / divisor,
+             s_diag_queue / divisor, s_diag_gaps, s_diag_last_frame, s_diag_count);
+        LOGI("pipeline drops backlog=%u stale_queue=%u host_processing=%.2fms host_samples=%u",
+             s_diag_backlog_drops, s_diag_queue_drops,
+             s_diag_host_samples ? (double)s_diag_host_latency / (s_diag_host_samples * 10.0) : 0.0,
+             s_diag_host_samples);
+        s_diag_start = end;
+        s_diag_total = s_diag_flush = s_diag_finish = 0;
+        s_diag_assembly = s_diag_queue = 0;
+        s_diag_count = s_diag_gaps = 0;
+        s_diag_backlog_drops = s_diag_queue_drops = 0;
+        s_diag_host_latency = 0;
+        s_diag_host_samples = 0;
+    }
+    return result;
 }
 
 void video_orbis_set_tuning(int pipeline_depth, int thread_prio,

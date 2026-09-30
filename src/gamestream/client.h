@@ -4,6 +4,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <Limelight.h>
 
 #include "certgen.h"
@@ -42,6 +43,7 @@ int gs_pair(gs_server_t *server, const char *pin);
 int gs_unpair(gs_server_t *server);
 
 int gs_applist(gs_server_t *server, app_entry_t **list);
+int gs_appasset(gs_server_t *server, int app_id, unsigned char **bytes, size_t *length);
 
 // Launch or resume an app and leave the server ready for LiStartConnection.
 // Fills config->remoteInputAesKey/Iv and server->rtspSessionUrl.

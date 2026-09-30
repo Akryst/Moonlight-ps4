@@ -209,6 +209,17 @@ bool input_poll(void) {
     if (pad.buttons & ORBIS_PAD_BUTTON_OPTIONS)   buttons |= PLAY_FLAG;
     if (pad.buttons & ORBIS_PAD_BUTTON_TOUCH_PAD) buttons |= TOUCHPAD_FLAG;
 
+    /* The physical PS button belongs to the console shell. Send the host's
+     * Guide button with a chord instead; keep its component buttons out of
+     * the same host event. Releasing the chord releases Guide normally. */
+    const unsigned guide_combo = ORBIS_PAD_BUTTON_L1 | ORBIS_PAD_BUTTON_R1 |
+                                 ORBIS_PAD_BUTTON_OPTIONS;
+    if ((pad.buttons & guide_combo) == guide_combo &&
+        !(pad.buttons & ORBIS_PAD_BUTTON_TOUCH_PAD)) {
+        buttons &= ~(LB_FLAG | RB_FLAG | PLAY_FLAG);
+        buttons |= SPECIAL_FLAG;
+    }
+
     // Y axis inverted: PS4 grows downward, Moonlight upward.
     short lx = stick_to_short(pad.leftStick.x);
     short ly = stick_to_short_inverted(pad.leftStick.y);

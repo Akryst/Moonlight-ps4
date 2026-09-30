@@ -1,9 +1,12 @@
 #include "ui_menu.h"
 #include "ui_draw.h"
+#include "ui_theme.h"
+#include "ui_art.h"
 #include "../log.h"
 #include "../input/input_pad.h"
 #include "../video/video.h"
 #include "../gamestream/gs_errors.h"
+#include "../gamestream/discovery.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,18 +20,22 @@
 
 #define UI_W 1920
 #define UI_H 1080
-#define UI_MAX_APPS 64
+#define UI_MAX_APPS 256
 
 /* Colors 0xAARRGGBB (BGRA LE). */
-#define COL_BG      0xFF0E1218u
-#define COL_PANEL   0xFF1A222Cu
-#define COL_SEL     0xFF24405Au
-#define COL_ACCENT  0xFF3FA7FFu
-#define COL_TEXT    0xFFE8ECF0u
-#define COL_DIM     0xFF8794A2u
-#define COL_WARN    0xFFFFB03Fu
+#define COL_BG      (ui_theme_current()->bg)
+#define COL_PANEL   (ui_theme_current()->panel)
+#define COL_SEL     (ui_theme_current()->selected)
+#define COL_ACCENT  (ui_theme_current()->accent)
+#define COL_TEXT    (ui_theme_current()->text)
+#define COL_DIM     (ui_theme_current()->dim)
+#define COL_WARN    (ui_theme_current()->warn)
 
 static int s_splash_hidden;
+static char s_notice[160];
+void ui_menu_set_notice(const char *message) {
+    snprintf(s_notice, sizeof(s_notice), "%s", message ? message : "");
+}
 
 static void ui_hide_splash_once(void) {
 #ifdef __ORBIS__
@@ -37,6 +44,17 @@ static void ui_hide_splash_once(void) {
     (void)sceSystemServiceHideSplashScreen();
     s_splash_hidden = 1;
 #endif
+}
+
+void ui_show_splash(int theme) {
+    ui_theme_set(theme);
+    if (video_ui_begin(UI_W, UI_H) != 0) return;
+    uint8_t *frame = malloc((size_t)UI_W * UI_H * 4);
+    if (!frame) return;
+    ui_surface_t surface = {frame, UI_W * 4, UI_W, UI_H};
+    ui_theme_splash(&surface);
+    if (video_ui_present(frame, UI_W * 4) == 0) ui_hide_splash_once();
+    free(frame);
 }
 
 void ui_show_status(const char *title, const char *line1, const char *line2) {
@@ -55,7 +73,7 @@ void ui_show_status(const char *title, const char *line1, const char *line2) {
     }
 
     ui_surface_t s = { staging, (int)pitch, UI_W, UI_H };
-    ui_clear(&s, COL_BG);
+    ui_theme_background(&s);
     ui_text(&s, 80, 80, 5, COL_TEXT, title ? title : "MOONLIGHT PS4");
     if (line1 && line1[0])
         ui_text(&s, 80, 220, 4, COL_ACCENT, line1);
@@ -74,8 +92,9 @@ void ui_show_status(const char *title, const char *line1, const char *line2) {
 }
 
 typedef enum {
-    TAB_APPS = 0,
-    TAB_SETTINGS = 1,
+    TAB_PCS = 0,
+    TAB_APPS = 1,
+    TAB_SETTINGS = 2,
 } ui_tab_t;
 
 enum {
@@ -90,32 +109,40 @@ enum {
     SET_PREFER_YCBCR,
     SET_FILE_LOG,
     SET_SHOW_STATS,
+    SET_DECODE_MODE,
+    SET_THEME,
     SET_COUNT,
 };
 
 static const char *k_set_names[SET_COUNT] = {
-    "Host",
+    "PC IP address",
     "Debug host",
     "Resolution",
     "FPS",
     "Bitrate (kbps)",
     "SOPS",
     "Local audio",
-    "Decoder HW",
+    "Hardware decoding",
     "YCbCr (experimental)",
     "File logging",
-    "Perf overlay",
+    "Performance overlay",
+    "Decode mode",
+    "Theme",
 };
 
-/* On-screen keyboard 4x10. */
-#define OSK_COLS 10
+/* Numeric IPv4 keyboard. */
+#define OSK_COLS 3
 #define OSK_ROWS 4
 static const char k_osk_chars[OSK_ROWS][OSK_COLS + 1] = {
-    "0123456789",
-    "ABCDEFGHIJ",
-    "KLMNOPQRST",
-    "UVWXYZ.-:_",
+    "123", "456", "789", ".0."
 };
+
+/* Only settings needed for personal play are exposed. */
+static const int k_visible_settings[] = {
+    SET_HOST, SET_THEME, SET_RES, SET_FPS, SET_BITRATE, SET_PREFER_HW, SET_SHOW_STATS, SET_FILE_LOG, SET_DECODE_MODE
+};
+#define VISIBLE_SETTINGS 9
+
 
 typedef struct {
     char name[CONFIG_MAX_APP];
@@ -129,6 +156,9 @@ typedef struct {
 
     ui_app_t apps[UI_MAX_APPS];
     int napps;
+    mdns_host_t hosts[MDNS_MAX_HOSTS];
+    int nhosts, sel_host;
+    char notice[160];
     int apps_err; /* 0 ok, 1 applist failed, 2 no connection */
 
     ui_tab_t tab;
@@ -146,6 +176,7 @@ typedef struct {
 } ui_state_t;
 
 static void fetch_apps(ui_state_t *st) {
+    ui_art_clear();
     st->napps = 0;
     if (!st->server) {
         st->apps_err = 2;
@@ -161,6 +192,8 @@ static void fetch_apps(ui_state_t *st) {
     for (app_entry_t *a = list; a && st->napps < UI_MAX_APPS; a = a->next) {
         snprintf(st->apps[st->napps].name, sizeof(st->apps[st->napps].name),
                  "%s", a->name ? a->name : "?");
+        char *trademark = strstr(st->apps[st->napps].name, "\xE2\x84\xA2");
+        if (trademark) memmove(trademark, trademark + 3, strlen(trademark + 3) + 1);
         st->apps[st->napps].id = a->id;
         st->napps++;
     }
@@ -198,7 +231,8 @@ static void quit_active_stream(ui_state_t *st) {
 static void preselect_app(ui_state_t *st) {
     st->sel_app = 0;
     for (int i = 0; i < st->napps; i++) {
-        if (!strcasecmp(st->apps[i].name, st->cfg->app_name)) {
+        if (!strcasecmp(st->apps[i].name, st->cfg->app_name) ||
+            atoi(st->cfg->app_name) == st->apps[i].id) {
             st->sel_app = i;
             break;
         }
@@ -210,6 +244,8 @@ static void preselect_app(ui_state_t *st) {
 static void set_value_str(const ui_state_t *st, int row, char *out, size_t cap) {
     const app_config_t *c = st->cfg;
     switch (row) {
+    case SET_THEME: snprintf(out, cap, "%s", ui_theme_name(c->ui_theme)); break;
+    case SET_DECODE_MODE: snprintf(out, cap, "%s", c->dec_pipeline_depth > 1 ? "Balanced" : "Low latency"); break;
     case SET_HOST:        snprintf(out, cap, "%s", c->host); break;
     case SET_DEBUG_HOST:  snprintf(out, cap, "%s", c->debug_host); break;
     case SET_RES:         snprintf(out, cap, "%dx%d", c->stream.width, c->stream.height); break;
@@ -257,9 +293,15 @@ static void osk_open(ui_state_t *st, int target) {
 }
 
 static void osk_accept(ui_state_t *st) {
+    if (!mdns_valid_ipv4(st->osk_buf)) {
+        snprintf(st->notice, sizeof(st->notice), "Enter a valid PC IPv4 address (for example 192.168.1.100).");
+        return;
+    }
+    st->notice[0] = 0;
     if (st->osk_target == SET_HOST) {
         if (strcmp(st->cfg->host, st->osk_buf) != 0) {
             snprintf(st->cfg->host, sizeof(st->cfg->host), "%s", st->osk_buf);
+            st->cfg->http_port = 47989;
             st->host_dirty = 1;
         }
         save_cfg(st);
@@ -301,8 +343,16 @@ static void osk_input(ui_state_t *st, unsigned pr) {
 
 static void launch_selected(ui_state_t *st) {
     if (st->napps > 0) {
-        snprintf(st->cfg->app_name, sizeof(st->cfg->app_name), "%s",
-                 st->apps[st->sel_app].name);
+        if (st->server && st->server->currentGame != 0 &&
+            st->server->currentGame != st->apps[st->sel_app].id) {
+            quit_active_stream(st);
+            if (st->server->currentGame != 0) {
+                LOGN("Close the active session before starting another game");
+                return;
+            }
+        }
+        snprintf(st->cfg->app_name, sizeof(st->cfg->app_name), "%d",
+                 st->apps[st->sel_app].id);
     }
     save_cfg(st);
     LOGI("ui: launch app='%s' (sel=%d host_dirty=%d)",
@@ -312,13 +362,16 @@ static void launch_selected(ui_state_t *st) {
 
 static void apps_input(ui_state_t *st, unsigned pr) {
     if ((pr & MENU_BTN_UP) && st->napps > 0)
-        st->sel_app = (st->sel_app + st->napps - 1) % st->napps;
+        st->sel_app = ui_theme_move_vertical(st->sel_app,st->napps,-1);
     if ((pr & MENU_BTN_DOWN) && st->napps > 0)
+        st->sel_app = ui_theme_move_vertical(st->sel_app,st->napps,1);
+    if ((pr & MENU_BTN_LEFT) && st->napps > 0)
+        st->sel_app = (st->sel_app + st->napps - 1) % st->napps;
+    if ((pr & MENU_BTN_RIGHT) && st->napps > 0)
         st->sel_app = (st->sel_app + 1) % st->napps;
-    if (pr & (MENU_BTN_L1 | MENU_BTN_R1))
-        st->tab = TAB_SETTINGS;
+
     if (pr & MENU_BTN_TRIANGLE) {
-        if (st->host_dirty) {
+        if (st->host_dirty || !st->server) {
             save_cfg(st);
             st->result = UI_MENU_RECONNECT;
         } else {
@@ -326,12 +379,13 @@ static void apps_input(ui_state_t *st, unsigned pr) {
             preselect_app(st);
         }
     }
-    /* X / O: start. OPTIONS: close active stream on Sunshine. */
+    /* X starts; O returns to the PC list. */
+    if (pr & MENU_BTN_CIRCLE) st->tab = TAB_PCS;
     if (pr & MENU_BTN_OPTIONS) {
         if (st->server && st->server->currentGame != 0)
             quit_active_stream(st);
     }
-    if (pr & (MENU_BTN_CROSS | MENU_BTN_CIRCLE)) {
+    if (pr & MENU_BTN_CROSS) {
         if (st->napps > 0)
             launch_selected(st);
         else if (st->apps_err)
@@ -342,10 +396,10 @@ static void apps_input(ui_state_t *st, unsigned pr) {
 static void settings_input(ui_state_t *st, unsigned pr) {
     app_config_t *c = st->cfg;
     if (pr & MENU_BTN_UP)
-        st->sel_set = (st->sel_set + SET_COUNT - 1) % SET_COUNT;
+        st->sel_set = (st->sel_set + VISIBLE_SETTINGS - 1) % VISIBLE_SETTINGS;
     if (pr & MENU_BTN_DOWN)
-        st->sel_set = (st->sel_set + 1) % SET_COUNT;
-    if (pr & (MENU_BTN_L1 | MENU_BTN_R1 | MENU_BTN_CIRCLE)) {
+        st->sel_set = (st->sel_set + 1) % VISIBLE_SETTINGS;
+    if (pr & MENU_BTN_CIRCLE) {
         st->tab = TAB_APPS;
         return;
     }
@@ -358,11 +412,16 @@ static void settings_input(ui_state_t *st, unsigned pr) {
         return;
 
     int changed = 1;
-    switch (st->sel_set) {
+    int setting = k_visible_settings[st->sel_set];
+    switch (setting) {
+    case SET_THEME:
+        c->ui_theme = (c->ui_theme + (dir ? dir : 1) + UI_THEME_COUNT) % UI_THEME_COUNT;
+        ui_theme_set(c->ui_theme);
+        break;
     case SET_HOST:
     case SET_DEBUG_HOST:
         if (activate)
-            osk_open(st, st->sel_set);
+            osk_open(st, setting);
         changed = 0;
         break;
     case SET_RES:
@@ -378,6 +437,7 @@ static void settings_input(ui_state_t *st, unsigned pr) {
         c->stream.bitrate = b;
         break;
     }
+    case SET_DECODE_MODE: c->dec_pipeline_depth = c->dec_pipeline_depth > 1 ? 1 : 2; break;
     case SET_SOPS:        c->sops = !c->sops; break;
     case SET_LOCAL_AUDIO: c->local_audio = !c->local_audio; break;
     case SET_PREFER_HW:   c->prefer_hw = !c->prefer_hw; break;
@@ -404,7 +464,7 @@ static void draw_osk(ui_state_t *st, ui_surface_t *s) {
     ui_rect(s, px - 4, py - 4, pw + 8, ph + 8, COL_ACCENT);
     ui_rect(s, px, py, pw, ph, COL_PANEL);
 
-    const char *title = (st->osk_target == SET_HOST) ? "EDIT HOST" : "EDIT DEBUG HOST";
+    const char *title = "PC IP ADDRESS";
     ui_text(s, px + 32, py + 28, 3, COL_ACCENT, title);
 
     /* Value with cursor */
@@ -414,7 +474,7 @@ static void draw_osk(ui_state_t *st, ui_surface_t *s) {
     ui_text(s, px + 40, py + 98, 3, COL_TEXT, line);
 
     /* Grid */
-    const int cell = 80, gx0 = px + 80, gy0 = py + 170;
+    const int cell = 80, gx0 = px + pw / 2 - OSK_COLS * cell / 2, gy0 = py + 170;
     for (int r = 0; r < OSK_ROWS; r++) {
         for (int cidx = 0; cidx < OSK_COLS; cidx++) {
             int x = gx0 + cidx * cell;
@@ -433,133 +493,104 @@ static void draw_osk(ui_state_t *st, ui_surface_t *s) {
             "X add   [] backspace   O cancel   OPTIONS accept");
 }
 
-static void draw_apps(ui_state_t *st, ui_surface_t *s) {
-    const int y0 = 250, row_h = 44, visible = 16;
-
-    if (st->apps_err == 2) {
-        ui_text(s, 120, y0, 3, COL_WARN, "NO CONNECTION TO HOST");
-        ui_text(s, 120, y0 + 50, 2, COL_DIM,
-                "Check Host in SETTINGS and press TRIANGLE to retry");
-        return;
-    }
-    if (st->apps_err == 1) {
-        ui_text(s, 120, y0, 3, COL_WARN, "FAILED TO FETCH APP LIST");
-        ui_text(s, 120, y0 + 50, 2, COL_DIM, "TRIANGLE to retry");
-        return;
-    }
-    if (st->napps == 0) {
-        ui_text(s, 120, y0, 3, COL_DIM, "No apps on the server");
-        return;
-    }
-
-    if (st->sel_app < st->app_first)
-        st->app_first = st->sel_app;
-    if (st->sel_app >= st->app_first + visible)
-        st->app_first = st->sel_app - visible + 1;
-
-    for (int i = 0; i < visible && st->app_first + i < st->napps; i++) {
-        int idx = st->app_first + i;
-        int y = y0 + i * row_h;
-        int sel = (idx == st->sel_app);
-        if (sel)
-            ui_rect(s, 100, y - 6, UI_W - 200, row_h - 4, COL_SEL);
-        int is_running = (st->server && st->server->currentGame != 0 &&
-                          st->apps[idx].id == st->server->currentGame);
-        int is_cur = !strcasecmp(st->apps[idx].name, st->cfg->app_name);
-        ui_text(s, 120, y, 3, sel ? COL_TEXT : COL_DIM, st->apps[idx].name);
-        if (is_running)
-            ui_text(s, UI_W - 280, y, 3, COL_WARN, "LIVE");
-        else if (is_cur)
-            ui_text(s, UI_W - 220, y, 3, COL_ACCENT, "*");
-    }
-    if (st->napps > visible) {
-        char sc[32];
-        snprintf(sc, sizeof(sc), "%d/%d", st->sel_app + 1, st->napps);
-        ui_text(s, UI_W - 220, y0 - 50, 2, COL_DIM, sc);
-    }
-}
+#include "ui_design.inc"
 
 static void draw_settings(ui_state_t *st, ui_surface_t *s) {
-    const int y0 = 250, row_h = 52;
-    for (int i = 0; i < SET_COUNT; i++) {
+    const int y0 = 230, row_h = 76;
+    int x=design_sidebar()?440:100;
+    for (int i = 0; i < VISIBLE_SETTINGS; i++) {
         int y = y0 + i * row_h;
         int sel = (i == st->sel_set);
         if (sel)
-            ui_rect(s, 100, y - 8, UI_W - 200, row_h - 6, COL_SEL);
-        ui_text(s, 120, y, 3, sel ? COL_TEXT : COL_DIM, k_set_names[i]);
+            ui_round_rect(s, x, y - 8, UI_W - x - 64, row_h - 6, 8, COL_SEL);
+        ui_label(s, x+24, y, 28, sel, sel ? COL_TEXT : COL_DIM, k_set_names[k_visible_settings[i]]);
         char val[160];
-        set_value_str(st, i, val, sizeof(val));
-        ui_text(s, 820, y, 3, sel ? COL_ACCENT : COL_DIM, val);
+        set_value_str(st, k_visible_settings[i], val, sizeof(val));
+        ui_label_fit(s, x+640, y, 28, 0, sel ? COL_ACCENT : COL_DIM, val, UI_W-x-720);
     }
     if (st->host_dirty)
-        ui_text(s, 120, y0 + SET_COUNT * row_h + 20, 2, COL_WARN,
-                "Host changed: TRIANGLE on APPS reconnects");
+        ui_label_fit(s, x+24, 936, 22, 0, COL_WARN,
+                "Host changed: open Games and press TRIANGLE to reconnect.",UI_W-x-64);
+}
+
+static void scan_hosts(ui_state_t *st) {
+    ui_show_status("FIND YOUR PC", "Searching the local network...", "Sunshine must be running on the same LAN.");
+    st->nhosts = mdns_discover(st->hosts, MDNS_MAX_HOSTS, 1800);
+    st->sel_host = 0;
+    if (st->nhosts < 0) {
+        st->nhosts = 0;
+        snprintf(st->notice, sizeof(st->notice), "Network scan failed. Use Settings to enter your PC IP.");
+    } else if (!st->nhosts) {
+        snprintf(st->notice, sizeof(st->notice), "No PCs found. Press TRIANGLE to scan again or enter an IP in Settings.");
+    } else st->notice[0] = 0;
+    input_menu_absorb();
+}
+
+static void pcs_input(ui_state_t *st, unsigned pr) {
+    if (pr & MENU_BTN_TRIANGLE) scan_hosts(st);
+    if (st->nhosts && (pr & MENU_BTN_UP))
+        st->sel_host = (st->sel_host + st->nhosts - 1) % st->nhosts;
+    if (st->nhosts && (pr & MENU_BTN_DOWN))
+        st->sel_host = (st->sel_host + 1) % st->nhosts;
+    if (pr & MENU_BTN_CROSS) {
+        if (st->nhosts) {
+            mdns_host_t *h = &st->hosts[st->sel_host];
+            snprintf(st->cfg->host, sizeof(st->cfg->host), "%s", h->address);
+            st->cfg->http_port = h->port;
+            save_cfg(st);
+            st->result = UI_MENU_RECONNECT;
+        } else if (st->cfg->host[0]) st->result = UI_MENU_RECONNECT;
+        else { st->tab = TAB_SETTINGS; st->sel_set = 0; osk_open(st, SET_HOST); }
+    }
+}
+
+static void draw_pcs(ui_state_t *st, ui_surface_t *s) {
+    int x=design_sidebar()?440:100;
+    ui_label(s, x+24, 250, 36, 1, COL_TEXT, "Your computers");
+    ui_label(s, x+24, 310, 26, 0, COL_DIM, "Choose a PC to connect and pair with Sunshine.");
+    if (!st->nhosts) {
+        ui_round_rect(s, x, 380, UI_W-x-64, 200, 14, COL_PANEL);
+        ui_label(s, x+36, 415, 32, 1, COL_TEXT, st->cfg->host[0] ? st->cfg->host : "Add your gaming PC");
+        ui_label(s, x+36, 475, 26, 0, COL_DIM, st->cfg->host[0] ? "X connect saved PC   TRIANGLE scan network" : "X enter IP   TRIANGLE scan network");
+    }
+    int first = st->sel_host >= 7 ? st->sel_host - 6 : 0;
+    for (int i = first; i < st->nhosts && i < first + 7; i++) {
+        int y = 390 + (i-first) * 78;
+        char name[64], line[80];
+        const char *end = strstr(st->hosts[i].instance, "._nvstream");
+        size_t len = end ? (size_t)(end - st->hosts[i].instance) : strlen(st->hosts[i].instance);
+        if (len >= sizeof(name)) len = sizeof(name)-1;
+        memcpy(name, st->hosts[i].instance, len); name[len] = 0;
+        ui_round_rect(s, x, y-12, UI_W-x-64, 70, 10, i == st->sel_host ? COL_SEL : COL_PANEL);
+        ui_icon(s,x+24,y+4,36,0,COL_TEXT);
+        ui_label_fit(s, x+86, y, 30, 1, COL_TEXT, name, 650);
+        snprintf(line, sizeof(line), "%s:%u", st->hosts[i].address, (unsigned)st->hosts[i].port);
+        ui_label(s, UI_W-420, y+6, 24, 0, COL_DIM, line);
+    }
 }
 
 static void draw_all(ui_state_t *st, ui_surface_t *s) {
-    ui_clear(s, COL_BG);
-
-    ui_text(s, 80, 48, 5, COL_TEXT, "MOONLIGHT PS4");
-
-    char status[256];
-    if (st->server) {
-        snprintf(status, sizeof(status), "Host: %s  (%s)", st->cfg->host,
-                 st->server->paired ? "paired" : "not paired");
-        ui_text(s, 80, 112, 2, COL_DIM, status);
-        if (st->server->currentGame != 0) {
-            const char *an = active_app_name(st);
-            char live[256];
-            if (an)
-                snprintf(live, sizeof(live), "Stream active: %s", an);
-            else
-                snprintf(live, sizeof(live), "Stream active (id=%d)",
-                         st->server->currentGame);
-            ui_text(s, 80, 136, 2, COL_WARN, live);
-        }
-    } else {
-        snprintf(status, sizeof(status), "Host: %s  (NO CONNECTION)", st->cfg->host);
-        ui_text(s, 80, 112, 2, COL_WARN, status);
-    }
-
-    /* Tabs */
-    ui_text(s, 120, 170, 3, st->tab == TAB_APPS ? COL_TEXT : COL_DIM, "APPS");
-    if (st->tab == TAB_APPS)
-        ui_rect(s, 120, 202, ui_text_w(3, "APPS"), 4, COL_ACCENT);
-    ui_text(s, 320, 170, 3, st->tab == TAB_SETTINGS ? COL_TEXT : COL_DIM, "SETTINGS");
-    if (st->tab == TAB_SETTINGS)
-        ui_rect(s, 320, 202, ui_text_w(3, "SETTINGS"), 4, COL_ACCENT);
-
-    if (st->tab == TAB_APPS)
-        draw_apps(st, s);
-    else
-        draw_settings(st, s);
-
-    const char *hint;
-    if (st->osk_active)
-        hint = "";
-    else if (st->tab == TAB_APPS) {
-        if (st->server && st->server->currentGame != 0)
-            hint = "X/O start   OPTIONS close stream   L1/R1 settings   /\\ reload";
-        else
-            hint = "X/O start   L1/R1 settings   /\\ reload   up/down select";
-    } else
-        hint = "X edit/toggle   left/right value   O back   L1/R1 apps";
-    ui_text(s, 80, UI_H - 60, 2, COL_DIM, hint);
-
-    if (st->osk_active)
-        draw_osk(st, s);
+    design_shell(st,s);
+    if(st->tab==TAB_APPS)design_apps(st,s);
+    else if(st->tab==TAB_PCS)draw_pcs(st,s);
+    else draw_settings(st,s);
+    design_footer(st,s);
+    if(st->notice[0])ui_label_fit(s,design_sidebar()?440:64,948,20,0,COL_WARN,st->notice,1300);
+    if(st->osk_active)draw_osk(st,s);
 }
-
 int ui_menu_run(app_config_t *cfg, gs_server_t *server, const char *config_dir) {
+    ui_theme_set(cfg->ui_theme);
     ui_state_t st;
     memset(&st, 0, sizeof(st));
     st.cfg = cfg;
     st.server = server;
     st.config_dir = config_dir;
     st.result = -1000;
+    snprintf(st.notice, sizeof(st.notice), "%s", s_notice);
+    s_notice[0] = 0;
     /* No host / no server: open Settings to configure. */
     if (!cfg->host[0] || !server) {
-        st.tab = TAB_SETTINGS;
+        st.tab = TAB_PCS;
         st.sel_set = SET_HOST;
     }
 
@@ -593,6 +624,7 @@ int ui_menu_run(app_config_t *cfg, gs_server_t *server, const char *config_dir) 
 
     fetch_apps(&st);
     preselect_app(&st);
+    if (!cfg->host[0]) scan_hosts(&st);
 
     /*
      * After OPTIONS+TOUCHPAD from stream, OPTIONS is still held. If s_menu_prev=0,
@@ -604,23 +636,17 @@ int ui_menu_run(app_config_t *cfg, gs_server_t *server, const char *config_dir) 
     input_menu_absorb();
 
     int dirty = 1;
-    int no_pad = 0;
+
     int idle_frames = 0;
     int grace = 45; /* ~0.7 s without accepting launch */
 
     while (st.result == -1000) {
         unsigned pr = 0, held = 0;
         if (input_menu_poll(&pr, &held) != 0) {
-            if (++no_pad > 180) {
-                if (cfg->host[0] && st.napps > 0) {
-                    LOGW("ui: no pad; auto-launching app '%s'", cfg->app_name);
-                    st.result = UI_MENU_LAUNCH;
-                    break;
-                }
-                no_pad = 0; /* no host: stay in menu */
-            }
-        } else {
-            no_pad = 0;
+            snprintf(st.notice, sizeof(st.notice), "Connect a DualShock 4 to continue.");
+            dirty = 1;
+        } else if (!strcmp(st.notice, "Connect a DualShock 4 to continue.")) {
+            st.notice[0] = 0; dirty = 1;
         }
 
         if (grace > 0) {
@@ -635,6 +661,11 @@ int ui_menu_run(app_config_t *cfg, gs_server_t *server, const char *config_dir) 
         if (pr) {
             if (st.osk_active)
                 osk_input(&st, pr);
+            else if (pr & (MENU_BTN_L1 | MENU_BTN_R1)) {
+                st.tab = (ui_tab_t)((st.tab + ((pr & MENU_BTN_R1) ? 1 : 2)) % 3);
+            }
+            else if (st.tab == TAB_PCS)
+                pcs_input(&st, pr);
             else if (st.tab == TAB_APPS)
                 apps_input(&st, pr);
             else
@@ -643,7 +674,7 @@ int ui_menu_run(app_config_t *cfg, gs_server_t *server, const char *config_dir) 
         }
 
         /* Exit NOW: don't redraw or flip (SubmitFlip VSYNC can hang
-         * with high pending / cur=-1 → eternal black screen). */
+         * with high pending / cur=-1 â†’ eternal black screen). */
         if (st.result != -1000) {
             LOGI("ui: leaving menu (result=%d)", st.result);
             break;
@@ -666,6 +697,7 @@ int ui_menu_run(app_config_t *cfg, gs_server_t *server, const char *config_dir) 
 
     LOGI("ui: freeing staging...");
     free(staging);
+    ui_art_clear();
     LOGI("ui: closing present...");
     video_ui_end();
     LOGI("ui: menu closed => %d (app='%s' host='%s')",

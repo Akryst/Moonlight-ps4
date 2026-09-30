@@ -10,6 +10,7 @@
 
 #include "log.h"
 #include "config.h"
+#include "ui/ui_menu.h"
 #include "stream.h"
 #include "video/video.h"
 #include "orbis/net_orbis.h"
@@ -23,7 +24,7 @@
 #define CONFIG_DIR "."
 #endif
 
-#define VERSION_STR "1.1.0"
+#define VERSION_STR "1.3.2-dev"
 
 static void read_line_file(const char *path, char *out, size_t outlen) {
     out[0] = '\0';
@@ -101,7 +102,7 @@ int main(void) {
 
 #ifdef __ORBIS__
     if (cfg.prefer_ycbcr && !video_present_plugin_loaded()) {
-        LOGW("ycbcr_unlock.loaded MISSING — YCbCr will fail without GoldHEN plugin");
+        LOGW("ycbcr_unlock.loaded MISSING â€” YCbCr will fail without GoldHEN plugin");
     } else if (cfg.prefer_ycbcr) {
         LOGI("ycbcr_unlock plugin: marker OK (%s)", ML_YCBCR_PLUGIN_MARKER);
     }
@@ -115,6 +116,7 @@ int main(void) {
     }
 #endif
 
+    ui_show_splash(cfg.ui_theme);
     if (net_orbis_init() != 0) {
         hang_forever("FAIL sceNet/UDP init");
     }

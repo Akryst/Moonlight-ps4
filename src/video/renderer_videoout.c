@@ -87,6 +87,32 @@ static int s_bgra_nt;         /* resolved: 1 = streaming stores */
 
 static int s_pipe_active;
 static int s_pipe_fb_idx = -1;
+static uint64_t s_slot_wait_budget_us=4000;
+static struct {
+    unsigned samples,waits,no_slot,submit_fail;
+    uint64_t wait_total_us,wait_max_us;
+} s_present_diag;
+void video_present_begin_session(int pipeline_depth) {
+    s_slot_wait_budget_us=pipeline_depth>1?8000:4000;
+    memset(&s_present_diag,0,sizeof(s_present_diag));
+    LOGI("present: frame policy slot_wait_budget=%llu us color=Rec709_limited_to_RGB_full",
+         (unsigned long long)s_slot_wait_budget_us);
+}
+static void present_diag_sample(uint64_t wait_us,int waited,int no_slot) {
+    s_present_diag.samples++;
+    if(waited) {
+        s_present_diag.waits++;s_present_diag.wait_total_us+=wait_us;
+        if(wait_us>s_present_diag.wait_max_us)s_present_diag.wait_max_us=wait_us;
+    }
+    s_present_diag.no_slot+=(unsigned)no_slot;
+    if(s_present_diag.samples>=60) {
+        LOGI("present_queue samples=%u waits=%u wait_avg=%.2fms wait_max=%.2fms no_slot=%u submit_fail=%u",
+             s_present_diag.samples,s_present_diag.waits,
+             s_present_diag.waits?(double)s_present_diag.wait_total_us/s_present_diag.waits/1000.0:0.0,
+             (double)s_present_diag.wait_max_us/1000.0,s_present_diag.no_slot,s_present_diag.submit_fail);
+        memset(&s_present_diag,0,sizeof(s_present_diag));
+    }
+}
 
 static void bgra_worker_start(void);
 static void bgra_worker_stop(void);
@@ -401,12 +427,7 @@ static int switch_to_bgra(int w, int h) {
     return 0;
 }
 
-static inline uint8_t clamp_u8(int v) {
-    if (v < 0) return 0;
-    if (v > 255) return 255;
-    return (uint8_t)v;
-}
-
+#include "yuv709.h"
 static void yuv_to_bgra(uint8_t *dst, int dst_pitch, int w, int h,
                         const uint8_t *y, const uint8_t *u, const uint8_t *v,
                         int pitch_y, int pitch_u, int pitch_v) {
@@ -417,16 +438,7 @@ static void yuv_to_bgra(uint8_t *dst, int dst_pitch, int w, int h,
         const uint8_t *vrow = v + (size_t)(row / 2) * (size_t)pitch_v;
         for (int x = 0; x < w; x++) {
             int yy = yrow[x];
-            int uu = (int)urow[x / 2] - 128;
-            int vv = (int)vrow[x / 2] - 128;
-            /* >>7 + coeffs ≤227: fit in int16 (avoids mullo 359/454 overflow). */
-            int r = yy + ((179 * vv) >> 7);
-            int g = yy - ((44 * uu + 92 * vv) >> 7);
-            int b = yy + ((227 * uu) >> 7);
-            drow[x * 4 + 0] = clamp_u8(b);
-            drow[x * 4 + 1] = clamp_u8(g);
-            drow[x * 4 + 2] = clamp_u8(r);
-            drow[x * 4 + 3] = 0xFF;
+            ml_yuv709_pixel(drow+x*4,yy,urow[x/2],vrow[x/2]);
         }
     }
 }
@@ -482,15 +494,7 @@ static void yuv_to_bgra_scaled(uint8_t *dst, int dst_pitch, int dst_w, int dst_h
         for (int x = 0; x < dst_w; x++) {
             int sx = x_lut[x];
             int yy = yrow[sx];
-            int uu = (int)urow[sx / 2] - 128;
-            int vv = (int)vrow[sx / 2] - 128;
-            int r = yy + ((179 * vv) >> 7);
-            int g = yy - ((44 * uu + 92 * vv) >> 7);
-            int b = yy + ((227 * uu) >> 7);
-            drow[x * 4 + 0] = clamp_u8(b);
-            drow[x * 4 + 1] = clamp_u8(g);
-            drow[x * 4 + 2] = clamp_u8(r);
-            drow[x * 4 + 3] = 0xFF;
+            ml_yuv709_pixel(drow+x*4,yy,urow[sx/2],vrow[sx/2]);
         }
     }
 }
@@ -508,9 +512,10 @@ static void yuv_to_bgra_scaled(uint8_t *dst, int dst_pitch, int dst_w, int dst_h
 static inline __attribute__((always_inline)) void
 bgra_store8(uint8_t *dp, __m128i y16, __m128i rv, __m128i guv, __m128i bu,
             __m128i a255, const int st_mode) {
-    __m128i r = _mm_add_epi16(y16, rv);
-    __m128i g = _mm_sub_epi16(y16, guv);
-    __m128i b = _mm_add_epi16(y16, bu);
+    __m128i luma=ml_yuv709_luma8(y16);
+    __m128i r = _mm_add_epi16(luma, rv);
+    __m128i g = _mm_sub_epi16(luma, guv);
+    __m128i b = _mm_add_epi16(luma, bu);
     __m128i br = _mm_packus_epi16(b, r);
     __m128i ga = _mm_packus_epi16(g, a255);
     __m128i bg0 = _mm_unpacklo_epi8(br, ga);
@@ -531,10 +536,7 @@ bgra_store8(uint8_t *dp, __m128i y16, __m128i rv, __m128i guv, __m128i bu,
 }
 
 static inline void nv12_to_bgra_px(uint8_t *dp, int yy, int uu, int vv) {
-    dp[0] = clamp_u8(yy + ((227 * uu) >> 7));
-    dp[1] = clamp_u8(yy - ((44 * uu + 92 * vv) >> 7));
-    dp[2] = clamp_u8(yy + ((179 * vv) >> 7));
-    dp[3] = 0xFF;
+    ml_yuv709_pixel(dp,yy,uu+128,vv+128);
 }
 
 /*
@@ -542,8 +544,8 @@ static inline void nv12_to_bgra_px(uint8_t *dp, int yy, int uu, int vv) {
  * prefetch next row pair (Jaguar). Constant `st_mode` → compiler emits
  * a single store variant per instantiation.
  *
- * Coefs >>7 (179/44/92/227): ≈ BT.601 JPEG and |chroma|·coeff ≤ 28829 < 32768
- * → mullo_epi16 without wrap (>>8 path with 359/454 painted lilac as #ffc400).
+ * Rec.709 limited-range conversion uses signed mulhi to preserve 32-bit
+ * products. Saturated colors cannot wrap as they did with old mullo formulas.
  */
 static inline __attribute__((always_inline)) void
 nv12_to_bgra_impl(uint8_t *dst, int dst_pitch, int w, int h,
@@ -552,10 +554,6 @@ nv12_to_bgra_impl(uint8_t *dst, int dst_pitch, int w, int h,
     const __m128i zero = _mm_setzero_si128();
     const __m128i m00ff = _mm_set1_epi16(0x00FF);
     const __m128i c128 = _mm_set1_epi16(128);
-    const __m128i c179 = _mm_set1_epi16(179);
-    const __m128i c44 = _mm_set1_epi16(44);
-    const __m128i c92 = _mm_set1_epi16(92);
-    const __m128i c227 = _mm_set1_epi16(227);
     const __m128i a255 = _mm_set1_epi16(255);
 
     int row = 0;
@@ -575,11 +573,8 @@ nv12_to_bgra_impl(uint8_t *dst, int dst_pitch, int w, int h,
             __m128i uv8 = _mm_loadu_si128((const __m128i *)(const void *)(uvrow + x));
             __m128i u16 = _mm_sub_epi16(_mm_and_si128(uv8, m00ff), c128);
             __m128i v16 = _mm_sub_epi16(_mm_srli_epi16(uv8, 8), c128);
-            __m128i rv = _mm_srai_epi16(_mm_mullo_epi16(v16, c179), 7);
-            __m128i guv = _mm_srai_epi16(
-                _mm_add_epi16(_mm_mullo_epi16(u16, c44),
-                              _mm_mullo_epi16(v16, c92)), 7);
-            __m128i bu = _mm_srai_epi16(_mm_mullo_epi16(u16, c227), 7);
+            __m128i rv,guv,bu;
+            ml_yuv709_chroma8(u16,v16,&rv,&guv,&bu);
             /* duplicate each chroma sample to its 2 px */
             __m128i rv_lo = _mm_unpacklo_epi16(rv, rv);
             __m128i rv_hi = _mm_unpackhi_epi16(rv, rv);
@@ -1163,21 +1158,21 @@ static void draw_stats_overlay(uint8_t *dst) {
     int tx = px + pad;
 
     snprintf(line, sizeof(line), "FPS %.1f", (double)live.fps);
-    ui_text(&s, tx, ty, scale, STATS_COL_GOOD, line);
+    ui_text_bitmap(&s, tx, ty, scale, STATS_COL_GOOD, line);
     ty += line_h;
 
     snprintf(line, sizeof(line), "DEC %.1fms  CONV %.1fms",
              (double)live.decode_ms, (double)live.convert_ms);
-    ui_text(&s, tx, ty, scale, STATS_COL_TEXT, line);
+    ui_text_bitmap(&s, tx, ty, scale, STATS_COL_TEXT, line);
     ty += line_h;
 
-    snprintf(line, sizeof(line), "PRES %.1fms  TOT %.1fms", (double)live.present_ms,
+    snprintf(line, sizeof(line), "PRES %.1fms  WORK %.1fms", (double)live.present_ms,
              (double)(live.decode_ms + live.convert_ms + live.present_ms));
-    ui_text(&s, tx, ty, scale, STATS_COL_TEXT, line);
+    ui_text_bitmap(&s, tx, ty, scale, STATS_COL_TEXT, line);
     ty += line_h;
 
     snprintf(line, sizeof(line), "%.0f KB/frame", (double)live.kb_per_frame);
-    ui_text(&s, tx, ty, scale, STATS_COL_DIM, line);
+    ui_text_bitmap(&s, tx, ty, scale, STATS_COL_DIM, line);
     ty += line_h + 8;
 
     /* Frame-time timeline: oldest on the left, most recent on the right. */
@@ -1218,6 +1213,7 @@ static void present_submit_flip(int next, uint8_t *dst, uint64_t convert_us) {
 
     uint64_t t1 = now_us();
     int32_t flip_rc = sceVideoOutSubmitFlip(s_video, next, (uint32_t)s_flip_mode, 0);
+    if(flip_rc!=0)s_present_diag.submit_fail++;
     s_fb_index = next;
     s_last_flip_idx = next;
 
@@ -1249,7 +1245,7 @@ static void present_submit_flip(int next, uint8_t *dst, uint64_t convert_us) {
              next, st.currentBuffer, st.numFlipPending);
     }
 
-    video_stats_add(0, convert_us, t2 - t1, 0);
+    video_stats_add(0, convert_us, t2 - t1, flip_rc == 0 && shown_ok ? 0 : 1);
     (void)t1;
 }
 
@@ -1300,12 +1296,24 @@ int video_present_bgra_pipe_kick(const uint8_t *y, const uint8_t *uv,
         return -1;
     if (s_pipe_active)
         (void)video_present_bgra_pipe_finish();
-    if (video_present_should_drop()) {
-        video_stats_add(0, 0, 0, 1);
-        return 0;
-    }
 
-    int next = pick_free_fb(NULL);
+    /* Arrival jitter can place this callback just before a pending vsync.
+     * Give the display a small bounded chance to release a buffer rather
+     * than dropping immediately. Never write into shown/pending buffers.
+     * Balanced mode waits up to 8 ms; low-latency retains the 4 ms policy.
+     * Scheduling may overshoot a sleep; no occupied buffer is ever reused. */
+    const uint64_t slot_start=now_us();
+    const uint64_t slot_deadline = slot_start + s_slot_wait_budget_us;
+    int next = -1;
+    int waited=0;
+    for (;;) {
+        if (!video_present_should_drop())
+            next = pick_free_fb(NULL);
+        if (next >= 0 || now_us() >= slot_deadline)
+            break;
+        waited=1;sceKernelUsleep(500);
+    }
+    present_diag_sample(now_us()-slot_start,waited,next<0);
     if (next < 0) {
         video_stats_add(0, 0, 0, 1);
         return 0;

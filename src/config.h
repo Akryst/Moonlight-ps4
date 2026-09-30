@@ -12,6 +12,7 @@ typedef struct {
     STREAM_CONFIGURATION stream; // embedded: width/height/fps/bitrate/...
 
     char host[CONFIG_MAX_HOST];
+    unsigned short http_port; // discovered SRV port; manual IP defaults to 47989
     char app_name[CONFIG_MAX_APP]; // name or numeric id
     char debug_host[64];
 
@@ -23,6 +24,7 @@ typedef struct {
     bool enable_file_log; // writes /data/moonlight/debug.log
     bool show_stats; // on-screen perf overlay (FPS/decode/convert/present/KB per frame)
     bool paired_ok; // runtime only
+    int ui_theme; // Midnight, Mono, Blue Wave, Daylight, Cinema (0..4)
 
     /* Videodec2 tuning, A/B-able on console without a rebuild. Rev-2 defaults
      * (depth=2 + AU ONION) are the fast path; files with cfg_rev < 2 get them

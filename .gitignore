@@ -1,6 +1,7 @@
 # Build (CMake / Ninja)
-build/
-build-*/
+/build/
+/build-*/
+/dist/
 .cache/
 compile_commands.json
 
@@ -48,3 +49,35 @@ pkg/assets/misc/moonlight/
 *~
 .DS_Store
 Thumbs.db
+/tools/
+__pycache__/
+
+# Local testing: suites, fixtures, temporary runs and reports
+/tests/
+/testing/
+/test-results/
+/test-reports/
+/coverage/
+/htmlcov/
+/artifacts/testing/
+**/test_*.c
+**/test_*.cpp
+**/test_*.py
+**/*_test.c
+**/*_test.cpp
+**/*_test.py
+.pytest_cache/
+.tox/
+.nox/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+junit*.xml
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+*.asan
+*.ubsan

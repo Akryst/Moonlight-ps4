@@ -39,6 +39,7 @@ set(COMMON_SOURCES
 )
 
 set(GAMESTREAM_SOURCES
+    src/gamestream/discovery.c
     src/gamestream/certgen.c
     src/gamestream/gs_http.c
     src/gamestream/mini_xml.c
@@ -80,6 +81,8 @@ if(PS4)
         src/video/decoder_orbis.c
         src/input/input_pad.c
         src/ui/ui_draw.c
+        src/ui/ui_theme.c
+        src/ui/ui_art.c
         src/ui/ui_menu.c
         ${COMMON_SOURCES}
         ${GAMESTREAM_SOURCES}
@@ -111,7 +114,8 @@ if(PS4)
 
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/eboot.bin
-        COMMAND ${OO_HOST_TOOLS}/create-fself
+        COMMAND ${CMAKE_COMMAND} -E env OO_PS4_TOOLCHAIN=${OO_PS4_TOOLCHAIN}
+                ${OO_HOST_TOOLS}/create-fself
                 -in=$<TARGET_FILE:moonlight-ps4.elf>
                 -out=${CMAKE_BINARY_DIR}/moonlight-ps4.oelf
                 --eboot ${CMAKE_BINARY_DIR}/eboot.bin

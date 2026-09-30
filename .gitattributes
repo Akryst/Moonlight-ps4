@@ -1,0 +1,10 @@
+* text=auto eol=lf
+*.sh text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.cmake text eol=lf
+*.patch text eol=lf
+third_party/DEPS text eol=lf
+*.prx binary
+*.sprx binary
+*.png binary

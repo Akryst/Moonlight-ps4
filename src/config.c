@@ -15,6 +15,7 @@
 void config_set_defaults(app_config_t *cfg) {
     memset(cfg, 0, sizeof(*cfg));
     LiInitializeStreamConfiguration(&cfg->stream);
+    cfg->http_port = 47989;
     cfg->stream.width = 1920;
     cfg->stream.height = 1080;
     cfg->stream.fps = 60;
@@ -119,6 +120,10 @@ int config_load(app_config_t *cfg, const char *dir) {
             cfg_rev = atoi(val);
         else if (!strcmp(key, "host"))
             snprintf(cfg->host, sizeof(cfg->host), "%s", val);
+        else if (!strcmp(key, "http_port")) {
+            int port = atoi(val);
+            if (port > 0 && port <= 65535) cfg->http_port = (unsigned short)port;
+        }
         else if (!strcmp(key, "app"))
             snprintf(cfg->app_name, sizeof(cfg->app_name), "%s", val);
         else if (!strcmp(key, "debug_host"))
@@ -147,6 +152,10 @@ int config_load(app_config_t *cfg, const char *dir) {
             cfg->enable_file_log = parse_bool(val);
         else if (!strcmp(key, "show_stats"))
             cfg->show_stats = parse_bool(val);
+        else if (!strcmp(key, "ui_theme")) {
+            int theme = atoi(val);
+            cfg->ui_theme = theme >= 0 && theme < 5 ? theme : 0;
+        }
         else if (!strcmp(key, "dec_pipeline_depth"))
             cfg->dec_pipeline_depth = atoi(val);
         else if (!strcmp(key, "dec_thread_prio"))
@@ -204,6 +213,7 @@ int config_save(const app_config_t *cfg, const char *dir) {
             "# moonlight-ps4\n"
             "cfg_rev = 2\n"
             "host = %s\n"
+            "http_port = %u\n"
             "app = %s\n"
             "debug_host = %s\n"
             "width = %d\n"
@@ -218,6 +228,7 @@ int config_save(const app_config_t *cfg, const char *dir) {
             "prefer_ycbcr = %s\n"
             "enable_file_log = %s\n"
             "show_stats = %s\n"
+            "ui_theme = %d\n"
             "dec_pipeline_depth = %d\n"
             "dec_thread_prio = %d\n"
             "slices_per_frame = %d\n"
@@ -225,7 +236,7 @@ int config_save(const app_config_t *cfg, const char *dir) {
             "dec_fb_garlic = %s\n"
             "bgra_workers = %d\n"
             "bgra_nt = %d\n",
-            cfg->host, cfg->app_name, cfg->debug_host,
+            cfg->host, (unsigned)cfg->http_port, cfg->app_name, cfg->debug_host,
             cfg->stream.width, cfg->stream.height, cfg->stream.fps, cfg->stream.bitrate,
             cfg->stream.packetSize,
             cfg->sops ? "true" : "false",
@@ -235,6 +246,7 @@ int config_save(const app_config_t *cfg, const char *dir) {
             cfg->prefer_ycbcr ? "true" : "false",
             cfg->enable_file_log ? "true" : "false",
             cfg->show_stats ? "true" : "false",
+            cfg->ui_theme,
             cfg->dec_pipeline_depth, cfg->dec_thread_prio, cfg->slices_per_frame,
             cfg->dec_au_onion ? "true" : "false",
             cfg->dec_fb_garlic ? "true" : "false",

@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <sys/time.h>
 
 static gs_server_t s_server;
 static client_identity_t s_id;
@@ -99,9 +100,10 @@ static int stream_connect(app_config_t *cfg, const char *config_dir) {
     snprintf(line, sizeof(line), "Host: %s", cfg->host);
     ui_show_status("MOONLIGHT PS4", "Connecting...", line);
 
-    LOGI("gs_init(%s:47989)...", cfg->host);
-    if (gs_init(&s_server, &s_id, cfg->host, 47989, config_dir) != GS_OK) {
+    LOGI("gs_init(%s:%u)...", cfg->host, (unsigned)cfg->http_port);
+    if (gs_init(&s_server, &s_id, cfg->host, cfg->http_port, config_dir) != GS_OK) {
         LOGE("gs_init FAIL: %s", gs_error ? gs_error : "?");
+        ui_menu_set_notice(gs_error ? gs_error : "Could not connect to Sunshine. Retry or change your PC IP.");
         ui_show_status("ERROR", "Could not connect",
                        gs_error ? gs_error : "gs_init FAIL");
         return -1;
@@ -149,6 +151,7 @@ static int stream_connect(app_config_t *cfg, const char *config_dir) {
         http_set_timeout_ms(0);
         LOGI("gs_pair => %d (%s)", pair_rc, gs_error ? gs_error : "ok");
         if (pair_rc != GS_OK) {
+            ui_menu_set_notice("Pairing failed. Connect again and enter the PIN in Sunshine.");
             ui_show_status("ERROR", "Pairing failed",
                            gs_error ? gs_error : "gs_pair FAIL");
             return -1;
@@ -181,7 +184,7 @@ static int stream_play(app_config_t *cfg) {
 
     /* If Sunshine already has another app active, cancel before launching. */
     if (s_server.currentGame != 0 && s_server.currentGame != app_id) {
-        LOGI("stream: currentGame=%d != %d → cancel previous",
+        LOGI("stream: currentGame=%d != %d â†’ cancel previous",
              s_server.currentGame, app_id);
         (void)gs_quit_app(&s_server);
     }
@@ -246,6 +249,8 @@ start_ok:
     if (cfg->show_stats && prefer_ycbcr)
         LOGW("stream: Perf overlay requires BGRA; disable YCbCr to see it");
 
+    video_present_begin_session(cfg->dec_pipeline_depth);
+    video_stats_begin_session();
     LOGI("LiStartConnection begin...");
     int ret = LiStartConnection(&s_server.serverInfo, &cfg->stream, &cl, &dr, &ar,
                                 &prefer_ycbcr, sizeof(prefer_ycbcr), NULL, 0);
@@ -256,13 +261,23 @@ start_ok:
     }
 
     LOGI("main loop; OPTIONS+TOUCHPAD 1s to quit");
+    LOGI("input: L1+R1+OPTIONS sends host Guide (PS) button");
 
+    struct timeval perf_start;
+    gettimeofday(&perf_start, NULL);
     int ticks = 0;
     while (!input_poll()) {
         usleep(8000);
         if (++ticks % 125 == 0) {
             video_stats_t st;
-            video_get_stats(&st);
+            video_take_stats(&st);
+            struct timeval perf_end;
+            gettimeofday(&perf_end, NULL);
+            double elapsed = (double)(perf_end.tv_sec - perf_start.tv_sec) +
+                             (double)(perf_end.tv_usec - perf_start.tv_usec) / 1000000.0;
+            if (elapsed > 0) LOGI("perf bitrate=%d fps=%.1f decodes/s=%.1f drops=%u interval=%.2fs",
+                cfg->stream.bitrate, st.frames / elapsed, st.decodes / elapsed, st.dropped, elapsed);
+            perf_start = perf_end;
             LOGI("stats t=%d connected=%d frames=%u decodes=%u drop=%u",
                  ticks, s_connected, st.frames, st.decodes, st.dropped);
             if (st.frames || st.decodes) {
@@ -276,7 +291,6 @@ start_ok:
                      st.frames ? (st.present_us_total / nf) / 1000.0 : 0.0);
                 LOGI("  au=%.2fms %.0fKB/frame", (st.au_us_total / nd) / 1000.0,
                      (st.au_bytes_total / nd) / 1024.0);
-                video_reset_stats();
             }
         }
         if (!s_connected && ticks > 250) {
@@ -287,9 +301,9 @@ start_ok:
 
     LOGI("leaving loop (quit or disconnect)");
     LiStopConnection();
-    /* No gs_quit_app: leave the game on Sunshine for resume → "paused". */
+    /* No gs_quit_app: leave the game on Sunshine for resume â†’ "paused". */
     LOGN("Stream paused");
-    LOGI("stream_play done OK → return to menu");
+    LOGI("stream_play done OK â†’ return to menu");
     return 0;
 }
 
@@ -316,9 +330,9 @@ int stream_run(app_config_t *cfg, const char *config_dir) {
     if (cfg->host[0]) {
         connected = (stream_connect(cfg, config_dir) == 0);
     } else {
-        LOGI("stream_run: empty host → settings menu");
+        LOGI("stream_run: empty host â†’ settings menu");
         ui_show_status("MOONLIGHT PS4", "Set the Host",
-                       "SETTINGS → Host → on-screen keyboard");
+                       "SETTINGS â†’ Host â†’ on-screen keyboard");
     }
 
     /* Menu <-> stream loop until the user closes with the PS button. */
@@ -347,7 +361,9 @@ int stream_run(app_config_t *cfg, const char *config_dir) {
 
         int rc = stream_play(cfg);
         LOGI("stream_play => %d", rc);
-        if (rc < 0)
-            connected = (stream_connect(cfg, config_dir) == 0);
+        if (rc < 0) {
+            ui_menu_set_notice("Streaming failed. Check Sunshine and press TRIANGLE to reconnect.");
+            connected = 0;
+        }
     }
 }

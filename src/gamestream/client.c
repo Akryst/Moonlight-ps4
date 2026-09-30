@@ -492,6 +492,19 @@ int gs_unpair(gs_server_t *server) {
 // Applist and launch
 // ---------------------------------------------------------------------------
 
+int gs_appasset(gs_server_t *server, int app_id, unsigned char **bytes, size_t *length) {
+    *bytes = NULL;
+    *length = 0;
+    http_resp_t resp = {0};
+    int ret = api_get(server, 1, &resp,
+        "/appasset?uniqueid=%s&appid=%d&AssetType=2&AssetIdx=0", GS_UNIQUEID, app_id);
+    if (ret == GS_OK) {
+        *bytes = (unsigned char *)resp.body;
+        *length = resp.len;
+    } else http_resp_free(&resp);
+    return ret;
+}
+
 int gs_applist(gs_server_t *server, app_entry_t **list) {
     char uuid[37];
     http_resp_t resp;

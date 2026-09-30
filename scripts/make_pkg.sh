@@ -10,7 +10,7 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TOOLS="$OO_PS4_TOOLCHAIN/bin/linux"
 
 TITLE="Moonlight PS4"
-VERSION="1.1.0"
+VERSION="01.32"
 TITLE_ID="MLNT00001"
 CONTENT_ID="IV0000-MLNT00001_00-MOONLIGHTPS40000"
 
@@ -21,12 +21,13 @@ STAGE="$OUTDIR/pkg-stage"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/sce_sys/about" "$STAGE/sce_module" "$STAGE/assets/misc"
 
-# Allowlist only — never copy runtime dumps / certs / logs from pkg/assets/misc.
+# Allowlist only â€” never copy runtime dumps / certs / logs from pkg/assets/misc.
 cp "$REPO_DIR/pkg/sce_sys/icon0.png" "$STAGE/sce_sys/"
 cp "$REPO_DIR/pkg/sce_sys/about/right.sprx" "$STAGE/sce_sys/about/"
 cp "$REPO_DIR/pkg/sce_module/libc.prx" "$STAGE/sce_module/"
 cp "$REPO_DIR/pkg/sce_module/libSceFios2.prx" "$STAGE/sce_module/"
 cp "$REPO_DIR/pkg/assets/misc/moonlight.ini" "$STAGE/assets/misc/"
+cp "$REPO_DIR/vendor/FONT-LICENSE.txt" "$STAGE/assets/misc/"
 cp "$EBOOT" "$STAGE/eboot.bin"
 
 SFO="$STAGE/sce_sys/param.sfo"
@@ -46,6 +47,7 @@ cd "$STAGE"
 FILES="eboot.bin sce_sys/about/right.sprx sce_sys/param.sfo sce_sys/icon0.png"
 FILES="$FILES sce_module/libc.prx sce_module/libSceFios2.prx"
 FILES="$FILES assets/misc/moonlight.ini"
+FILES="$FILES assets/misc/FONT-LICENSE.txt"
 
 "$TOOLS/create-gp4" -out pkg.gp4 --content-id="$CONTENT_ID" --files "$FILES"
 "$TOOLS/PkgTool.Core" pkg_build pkg.gp4 "$OUTDIR"

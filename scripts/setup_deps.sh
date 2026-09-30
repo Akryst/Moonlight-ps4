@@ -83,6 +83,9 @@ while read -r name path url pin; do
     checkout_pin "$name" "$path" "$url" "$pin"
 done < <(grep -v '^[[:space:]]*#' "$DEPS_FILE" | grep -v '^[[:space:]]*$')
 
+# mbedTLS 3.6 needs its pinned framework submodule for generated sources.
+git -C "$REPO_DIR/third_party/mbedtls" submodule update --init --depth 1
+
 # Nested pins (enet / nanors) after parent exists.
 while read -r name path url pin; do
     [[ -z "${name:-}" || "$name" =~ ^# ]] && continue

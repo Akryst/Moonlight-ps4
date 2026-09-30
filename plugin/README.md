@@ -9,9 +9,9 @@ as BGRA OK) you also need the kpayload
 [`ycbcr_kpatch`](ycbcr_kpatch/README.md) via BinLoader `:9090` **once per
 boot**. RE: [`docs/KERNEL_YCBCR_RE.md`](../docs/KERNEL_YCBCR_RE.md).
 
-Current Moonlight package: **1.1.0** (`Moonlight-1.1.0.pkg`), `CATEGORY=gd`.
-App defaults: `prefer_hw=true`, `prefer_ycbcr=false` (BGRA path). Enable YCbCr
-from the on-console Settings menu or `moonlight.ini` after kpayload + plugin.
+These plugins are experimental and are not required by release **01.32**.
+The standard client uses `prefer_hw=true`, `prefer_ycbcr=false` (BGRA path).
+The procedure below documents the separate YCbCr research path.
 
 ## What it does (1.63)
 

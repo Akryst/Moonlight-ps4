@@ -54,6 +54,7 @@ CMAKE_ARGS=(
     -G Ninja
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN"
     -DCMAKE_BUILD_TYPE=RelWithDebInfo
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 )
 
 if [[ "$ENABLE_HW" -eq 0 ]]; then

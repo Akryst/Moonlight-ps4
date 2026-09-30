@@ -40,6 +40,8 @@ typedef struct {
 
 void video_get_stats(video_stats_t *out);
 void video_reset_stats(void);
+void video_take_stats(video_stats_t *out);
+void video_stats_begin_session(void);
 void video_stats_add(unsigned long long decode_us, unsigned long long convert_us,
                      unsigned long long present_us, unsigned dropped);
 /* Accumulate Decode time and increment decodes (not frames). */
@@ -61,7 +63,7 @@ typedef struct {
     float convert_ms;   /* avg convert (bounce+blit/bgra) time over the window */
     float present_ms;   /* avg SubmitFlip+wait time over the window */
     float kb_per_frame; /* avg AU (encoded) size over the window */
-    float frame_ms[VIDEO_STATS_HISTORY]; /* decode+convert+present per frame, oldest..newest */
+    float frame_ms[VIDEO_STATS_HISTORY]; /* delivery interval per frame, oldest..newest */
     int frame_count;                     /* valid entries in frame_ms */
 } video_live_stats_t;
 
@@ -71,6 +73,8 @@ void video_stats_get_live(video_live_stats_t *out);
 /* workers <= 0 keeps the default. nt_pref: -1 auto (from the framebuffer
  * mapping), 0 forces cached stores, 1 forces streaming stores. */
 void video_present_set_bgra_tuning(int workers, int nt_pref);
+/* Reset presentation diagnostics and select the bounded slot wait per session. */
+void video_present_begin_session(int pipeline_depth);
 int video_present_init(int w, int h, int prefer_ycbcr);
 void video_present_shutdown(void);
 int video_present_should_drop(void);
