@@ -26,7 +26,7 @@ void ui_round_rect(ui_surface_t *s, int x, int y, int w, int h, int radius, uint
 void ui_overlay(ui_surface_t *s, int x, int y, int w, int h, uint32_t color, int opacity);
 void ui_focus(ui_surface_t *s, int x, int y, int w, int h, int radius, uint32_t color, int glow);
 void ui_icon(ui_surface_t *s, int x, int y, int size, int type, uint32_t color);
-void ui_moon(ui_surface_t *s, int cx, int cy, int radius, uint32_t color, uint32_t waves);
+void ui_moonlight_logo(ui_surface_t *s, int cx, int cy, int radius, uint32_t color);
 void ui_circle(ui_surface_t *s, int cx, int cy, int radius, uint32_t argb);
 void ui_image(ui_surface_t *s, int x, int y, int w, int h,
               const uint8_t *rgba, int iw, int ih);

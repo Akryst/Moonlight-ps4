@@ -2,17 +2,17 @@
 
 # Moonlight PS4
 
-### Release 01.32 · Experimental
+### Release 01.33 · Experimental
 
 Stream your PC games to a jailbroken PS4 with Sunshine and a DualShock 4.
 
-![Version](https://img.shields.io/badge/release-01.32-36CADB?style=flat-square&labelColor=172B40)
+![Version](https://img.shields.io/badge/release-01.33-36CADB?style=flat-square&labelColor=172B40)
 ![Platform](https://img.shields.io/badge/tested-PS4%20%2F%209.00%20%2F%20GoldHEN-0B1525?style=flat-square&labelColor=172B40)
 ![Target](https://img.shields.io/badge/target-1080p60-36CADB?style=flat-square&labelColor=172B40)
 
-<img src="design/native-01.31/midnight-splash.png" alt="Midnight splash — native renderer preview" width="800">
+<img src="design/native-01.33/midnight-splash.png" alt="Moonlight PS4 01.33 splash with the Moonlight logo — native renderer preview" width="800">
 
-**[What's new](#whats-new-in-0132)** · **[Install](#installation)** · **[Controls](#controls)** · **[Known issues](#known-issues)**
+**[What's new](#whats-new-in-0133)** · **[Install](#installation)** · **[Controls](#controls)** · **[Known issues](#known-issues)**
 
 </div>
 
@@ -20,12 +20,11 @@ Stream your PC games to a jailbroken PS4 with Sunshine and a DualShock 4.
 > affiliated with, endorsed by, or maintained by the official Moonlight project.
 > Product names belong to their respective owners.
 
-## What's new in 01.32
+## What's new in 01.33
 
-- Corrected Rec.709 limited-range video conversion for accurate color handling.
-- Increased the free-buffer wait budget in Balanced mode from 4 to 8 ms to
-  attempt to reduce dropped frames. Low latency keeps the 4 ms budget.
-- Added presentation-queue diagnostics for buffer waits and failed submissions.
+- Replaced the crescent splash mark with Moonlight's eight-segment logo in all five themes.
+- Retains the Rec.709 color correction, Balanced presentation policy and
+  presentation-queue diagnostics introduced in 01.32.
 
 The package compiles and host tests pass. The new presentation policy still
 needs validation on PS4; it may add latency under contention.
@@ -44,12 +43,12 @@ needs validation on PS4; it may add latency under contention.
 <details>
 <summary><strong>Preview the five themes</strong></summary>
 
-![Themes, splash screens and settings](design/native-themes-preview-01.31.png)
+![Themes, splash screens and settings](design/native-themes-preview-01.33.png)
 
 </details>
 
 <sub>Images are previews produced by the actual C UI renderer on a development
-PC, not PS4 captures. The 01.31 UI is retained in 01.32. Console screenshots
+PC, not PS4 captures. The previews show the 01.33 UI. Console screenshots
 are pending; game artwork belongs to its respective owners.</sub>
 
 ## Installation
@@ -58,7 +57,7 @@ are pending; game artwork belongs to its respective owners.</sub>
 Ethernet-connected PC running [Sunshine](https://github.com/LizardByte/Sunshine).
 The Windows test host uses ViGEmBus for controller emulation.
 
-- **Package:** `Moonlight-PS4-01.32-test.pkg`
+- **Package:** `Moonlight-PS4-01.33-test.pkg`
 - **Title ID:** `MLNT00001`
 - **Settings:** `/data/moonlight`
 
@@ -96,7 +95,7 @@ The physical PS button opens the PS4 system menu. Use the Guide shortcut for Ste
 - **Locked 60 FPS is not guaranteed.** An earlier ETS2 Desktop-stream sample
   averaged 58.5 client-reported FPS over about 8.5 minutes, with the final
   minutes near 59.9 FPS. Sunshine captured at 59.94 Hz.
-- The 01.32 color correction and presentation changes need console comparison.
+- The 01.33 color correction and presentation changes need console comparison.
   The reported sharpening appearance has not been conclusively diagnosed.
 - Compatibility beyond the original PS4 / firmware 9.00 setup is unverified.
 - Discovery currently covers local IPv4; use manual IP if multicast is unavailable.

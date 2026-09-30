@@ -67,7 +67,7 @@ void ui_theme_splash(ui_surface_t *s) {
         ui_overlay(s,0,0,s->w,s->h,t->bg,s_index==0?70:125);
     }
     int cx=s->w/2,cy=350;
-    ui_moon(s,cx-25,cy,112,t->text,s_index==1?t->text:t->accent);
+    ui_moonlight_logo(s,cx,cy,112,t->text);
     int size=s_index==1?60:54;
     const char *title="M O O N L I G H T";
     ui_label(s,cx-ui_label_w(size,0,title)/2,530,size,0,t->text,title);

@@ -3,10 +3,11 @@
 - `lake-background.png`: generated with the built-in imagegen tool, then embedded
   at 1280x720 by `scripts/embed_ui_background.py`. Used for Desktop and the
   Midnight/Cinema splashes. The original generated asset is preserved here.
-- `native-01.31/*.png` and `native-themes-preview-01.31.png`: actual framebuffer
+- `native-01.33/*.png` and `native-themes-preview-01.33.png`: actual framebuffer
   output of the C renderer, converted to PNG for review. These are not AI mockups.
-- Icons, rounded borders, glows, wave ribbons and the crescent/wave mark are
-  drawn by native C code.
+- Icons, rounded borders, glows and wave ribbons are drawn by native C code.
+  Since 01.33, the splash uses Moonlight's eight-segment circular logo, matching
+  the existing package icon `pkg/sce_sys/icon0.png`, with the theme's text color.
 - The proportional font atlas is generated from DejaVu Sans regular/bold
   by `scripts/generate_ui_font.py`; copyright/license in `vendor/FONT-LICENSE.txt`.
   The source TTFs can be supplied from Ubuntu's fonts-dejavu-core package.

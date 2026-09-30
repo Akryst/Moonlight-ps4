@@ -131,20 +131,25 @@ void ui_icon(ui_surface_t *s,int x,int y,int size,int type,uint32_t color) {
         if(type==8) {line(s,x+size/2,y+size/4,x+size/4,y+size*3/4,unit,color);line(s,x+size/4,y+size*3/4,x+size*3/4,y+size*3/4,unit,color);line(s,x+size*3/4,y+size*3/4,x+size/2,y+size/4,unit,color);}
     }
 }
-void ui_moon(ui_surface_t *s,int cx,int cy,int radius,uint32_t color,uint32_t waves) {
-    int inner=radius*9/10, ox=radius*2/5, oy=-radius/5;
-    for(int y=-radius;y<=radius;y++)for(int x=-radius;x<=radius;x++) {
-        int d=x*x+y*y, di=(x-ox)*(x-ox)+(y-oy)*(y-oy);
-        if(d<=radius*radius&&di>=inner*inner)pixel(s,cx+x,cy+y,color,255);
-    }
-    for(int j=0;j<3;j++) {
-        int px=cx-radius/2, py=cy+radius*3/4+j*12;
-        for(int t=1;t<=100;t++) {
-            int x=cx-radius/2+radius*2*t/100;
-            int u=t-50;
-            int y=cy+radius*3/4+j*12-radius*t/120 + u*u*u*radius/600000;
-            line(s,px,py,x,y,4-j,waves);px=x;py=y;
+void ui_moonlight_logo(ui_surface_t *s,int cx,int cy,int radius,uint32_t color) {
+    if(radius<1||radius>2048)return;
+    /* Eight circular segments, matching pkg/sce_sys/icon0.png. Transparent
+     * radial gaps retain the theme background; 4x4 coverage smooths edges. */
+    int r=radius*8, gap=r/25, diagonal_gap=gap*1414/1000;
+    int x0=cx-radius<0?0:cx-radius, y0=cy-radius<0?0:cy-radius;
+    int x1=cx+radius<s->w?cx+radius:s->w-1;
+    int y1=cy+radius<s->h?cy+radius:s->h-1;
+    for(int y=y0;y<=y1;y++)for(int x=x0;x<=x1;x++) {
+        unsigned covered=0;
+        for(int sy=0;sy<4;sy++)for(int sx=0;sx<4;sx++) {
+            int dx=(x-cx)*8+sx*2-3,dy=(y-cy)*8+sy*2-3;
+            int ax=dx<0?-dx:dx,ay=dy<0?-dy:dy;
+            int d1=dx-dy,d2=dx+dy;
+            if(d1<0)d1=-d1;if(d2<0)d2=-d2;
+            if(dx*dx+dy*dy<=r*r&&ax>gap&&ay>gap&&
+               d1>diagonal_gap&&d2>diagonal_gap)covered++;
         }
+        if(covered)pixel(s,x,y,color,(covered*255+8)/16);
     }
 }
 
