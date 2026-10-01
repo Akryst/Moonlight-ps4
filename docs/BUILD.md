@@ -16,7 +16,7 @@ Build and export the package (local host tests run if present):
 wsl -d Ubuntu -- bash scripts/build_from_windows.sh
 ```
 
-Output: `dist/Moonlight-PS4-01.34-test.pkg` and `dist/SHA256SUMS`.
+Output: `dist/Moonlight-PS4-01.35-test.pkg` and `dist/SHA256SUMS`.
 The script mirrors source to `~/ps4dev/moonlight-client` to keep dependencies
 and build outputs on the Linux filesystem. At the repository root, `build.bat`
 invokes the same build.

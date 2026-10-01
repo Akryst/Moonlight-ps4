@@ -23,6 +23,7 @@ static gs_server_t s_server;
 static client_identity_t s_id;
 static volatile int s_connected;
 static char s_stream_title[CONFIG_MAX_APP];
+static int s_catalog_requested;
 
 static void cl_stage_starting(int stage) {
     const char *name = LiGetStageName(stage);
@@ -163,6 +164,24 @@ static int stream_connect(app_config_t *cfg, const char *config_dir) {
         ui_show_status("MOONLIGHT PS4", "Paired OK", "Opening menu...");
     } else {
         LOGI("already paired; skip pair");
+    }
+    /* Exactly once per app run, before the first app list is fetched. The
+     * optional Windows companion authenticates our existing paired cert. */
+    if (!s_catalog_requested) {
+        s_catalog_requested = 1;
+        http_resp_t response = {0};
+        const char *saved_error = gs_error;
+        ui_show_status("MOONLIGHT PS4", "Loading games...", "");
+        http_set_timeout_ms(60000);
+        int sync_rc = http_get(cfg->host, 47991, 1,
+                               "/moonlight-ps4/open", &response);
+        http_set_timeout_ms(0);
+        http_resp_free(&response);
+        gs_error = saved_error;
+        LOGI("startup Steam sync => %d (companion is optional)", sync_rc);
+        /* The companion may have reloaded Sunshine after a catalog change. */
+        if (sync_rc == GS_OK)
+            gs_refresh_status(&s_server);
     }
     return 0;
 }
@@ -309,6 +328,7 @@ start_ok:
 
 int stream_run(app_config_t *cfg, const char *config_dir) {
     s_connected = 0;
+    s_catalog_requested = 0;
 
     LOGI("identity_init(%s)...", config_dir);
     if (identity_init(&s_id, config_dir) != GS_OK) {

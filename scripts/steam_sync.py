@@ -202,7 +202,9 @@ def safe_reload(apps: Path, checksum: str):
             return "Reload deferred: a Sunshine session is active"
         if os.name != "nt":
             return "Restart Sunshine to load the updated catalog"
-        subprocess.run(["powershell.exe", "-NoProfile", "-Command", "Restart-Service SunshineService"], check=True)
+        subprocess.run(["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden",
+                        "-Command", "Restart-Service SunshineService"], check=True,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
         write_atomic(state, checksum.encode("ascii"))
         return "Sunshine reloaded"
     except (OSError, ValueError, ET.ParseError, subprocess.CalledProcessError) as exc:

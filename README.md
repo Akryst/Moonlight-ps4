@@ -2,11 +2,11 @@
 
 # Moonlight PS4
 
-### Release 01.34 · Experimental
+### Release 01.35 · Experimental
 
 Stream your PC games to a jailbroken PS4 with Sunshine and a DualShock 4.
 
-![Version](https://img.shields.io/badge/release-01.34-36CADB?style=flat-square&labelColor=172B40)
+![Version](https://img.shields.io/badge/release-01.35-36CADB?style=flat-square&labelColor=172B40)
 ![Platform](https://img.shields.io/badge/tested-PS4%20%2F%209.00%20%2F%20GoldHEN-0B1525?style=flat-square&labelColor=172B40)
 ![Target](https://img.shields.io/badge/target-1080p60-36CADB?style=flat-square&labelColor=172B40)
 
@@ -14,9 +14,9 @@ Stream your PC games to a jailbroken PS4 with Sunshine and a DualShock 4.
 
 <sub>Captured on an original PS4 running firmware 9.00 with GoldHEN · Midnight theme · Client 01.33.</sub>
 
-**[What's new](#whats-new-in-0134)** · **[Install](#installation)** · **[Controls](#controls)** · **[Known issues](#known-issues)**
+**[What's new](#whats-new-in-0135)** · **[Install](#installation)** · **[Controls](#controls)** · **[Known issues](#known-issues)**
 
-**[Download PKG](https://github.com/Akryst/Moonlight-ps4/releases/download/v1.3.4/Moonlight-PS4-01.34-test.pkg)** · **[Release notes & checksums](https://github.com/Akryst/Moonlight-ps4/releases/tag/v1.3.4)**
+**[Download PKG](https://github.com/Akryst/Moonlight-ps4/releases/download/v1.3.5/Moonlight-PS4-01.35-test.pkg)** · **[Release notes & checksums](https://github.com/Akryst/Moonlight-ps4/releases/tag/v1.3.5)**
 
 </div>
 
@@ -24,16 +24,22 @@ Stream your PC games to a jailbroken PS4 with Sunshine and a DualShock 4.
 > affiliated with, endorsed by, or maintained by the official Moonlight project.
 > Product names belong to their respective owners.
 
-## What's new in 01.34
+## What's new in 01.35
 
-- Event-driven buffer waits, with bounded polling fallback if flip events fail.
-- Safer buffer selection from a single VideoOut status snapshot.
-- Rechecks decoded-frame freshness and limits waiting for already delayed frames.
-- New diagnostics for pending flips and observed submit-to-display delay.
-- Retains the Moonlight logo, five themes and Rec.709 color correction.
+- Steam synchronization runs once when Moonlight opens on PS4 and connects to the PC, before loading Games.
+- Removes the companion's five-minute synchronization schedule and synchronization at Windows sign-in.
+- A windowless Windows listener waits for the PS4 opening request; returning from a stream or refreshing Games does not trigger another scan.
+- Uses the existing Sunshine pairing certificate of an enabled device named **PS4** to authenticate the request.
+- Required Sunshine service reloads run without a PowerShell window and remain deferred while a stream is active.
+- Retains the 01.34 presentation policy, five themes and Rec.709 color correction.
 
-The package compiles and host tests pass. The new presentation policy still
-needs validation on PS4; it may add latency under contention.
+**Upgrade both parts:** install the 01.35 PKG and rerun the updated Windows
+companion installer as administrator. An older client does not send the opening
+request. See [Steam setup](docs/STEAM.md).
+
+Compilation, host checks and companion authentication checks pass. The opening
+request still needs end-to-end validation on PS4; no streaming performance gain
+is claimed.
 
 ## Included features
 
@@ -65,12 +71,12 @@ an actual PS4 screenshot. Game artwork belongs to its respective owners.</sub>
 Ethernet-connected PC running [Sunshine](https://github.com/LizardByte/Sunshine).
 The Windows test host uses ViGEmBus for controller emulation.
 
-- **Package:** `Moonlight-PS4-01.34-test.pkg`
+- **Package:** `Moonlight-PS4-01.35-test.pkg`
 - **Title ID:** `MLNT00001`
 - **Settings:** `/data/moonlight`
 
 Download the PKG and `SHA256SUMS` from the
-[01.34 experimental release](https://github.com/Akryst/Moonlight-ps4/releases/tag/v1.3.4).
+[01.35 experimental release](https://github.com/Akryst/Moonlight-ps4/releases/tag/v1.3.5).
 The release also includes the optional Windows Steam companion. Build from
 source using [docs/BUILD.md](docs/BUILD.md).
 
@@ -105,9 +111,9 @@ The physical PS button opens the PS4 system menu. Use the Guide shortcut for Ste
   averaged 58.5 client-reported FPS over about 8.5 minutes, with the final
   minutes near 59.9 FPS. Sunshine captured at 59.94 Hz.
 - A 01.33 Stellar Blade sample averaged 59.0 client-reported FPS over 217 seconds,
-  with 33 local buffer-starvation drops. This is the baseline for testing 01.34,
+  with 33 local buffer-starvation drops. This is the baseline for testing the 01.34 presentation policy,
   not a measurement of the new release's performance.
-- The 01.34 presentation changes need console comparison.
+- The presentation changes introduced in 01.34 need console comparison.
   The reported sharpening appearance has not been conclusively diagnosed.
 - Compatibility beyond the original PS4 / firmware 9.00 setup is unverified.
 - Discovery currently covers local IPv4; use manual IP if multicast is unavailable.
