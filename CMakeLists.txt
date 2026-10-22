@@ -108,6 +108,7 @@ if(PS4)
         src/ui/ui_draw.c
         src/ui/ui_theme.c
         src/ui/ui_art.c
+        src/ui/ui_stream.c
         src/ui/quick_menu.c
         src/ui/ui_menu.c
         ${COMMON_SOURCES}

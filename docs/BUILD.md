@@ -1,6 +1,6 @@
 # Build Moonlight PS4
 
-Run commands from the repository root. Release 1.4.0 uses PS4 package version 01.40.
+Run commands from the repository root. Release 1.4.1 uses PS4 package version 01.41.
 
 ## Windows with Ubuntu WSL
 
@@ -16,7 +16,7 @@ Build and export the package (local host tests run if present):
 wsl -d Ubuntu -- bash scripts/build_from_windows.sh
 ```
 
-Output: `dist/Moonlight-PS4-01.40-test.pkg` and `dist/SHA256SUMS`.
+Output: `dist/Moonlight-PS4-01.41-test.pkg` and `dist/SHA256SUMS`.
 The script mirrors source to `~/ps4dev/moonlight-client` to keep dependencies
 and build outputs on the Linux filesystem. At the repository root, `build.bat`
 invokes the same build.
@@ -31,7 +31,7 @@ if [ -f tests/run_host_tests.sh ]; then bash tests/run_host_tests.sh; fi
 bash scripts/build_pkg.sh
 ```
 
-Output: `build-ps4/Moonlight-01.40.pkg`.
+Output: `build-ps4/Moonlight-01.41.pkg`.
 The scripts prepare OpenOrbis 0.5.4, host LLVM/Clang tools and PS4 FFmpeg.
 Dependencies are pinned in `third_party/DEPS`; local PS4 changes are reapplied
 from `patches/`. Do not commit patched dependency working trees into submodules.
@@ -154,3 +154,25 @@ Build artifact: `Moonlight-PS4-01.36-COOP1-test.pkg`.
 The release asset is `Moonlight-PS4-01.40.pkg`. The local Windows build helper
 retains its `-test.pkg` suffix. Version logging remains enabled; the startup
 version notification has been removed. See [release notes](RELEASE_01_40.md).
+
+## Stream overlay test build
+
+`Moonlight-PS4-01.40-OVERLAY1-test.pkg` replaces the central quick menu with a
+right-side panel matching the portrait UI, PNG action prompts and shorter labels.
+Statistics use fixed label/value columns and bounded history sampling. The old
+statistics code wrote a fifth row into a four-row array; the new renderer removes
+that overflow. Drawing lives in `src/ui/ui_stream.c` so the exact runtime output
+can be checked with ASan/UBSan on the host at 1080p, 720p and 480p. Test values in
+rendered previews are simulated, not console measurements.
+
+Controller PNGs are preloaded before streaming, avoiding file reads/decodes on
+the video presentation thread. The startup version notification remains removed.
+The internal log version is `1.4.1-dev-overlay1`; the PS4 test package remains
+01.40. Physical-console appearance and overlay frame cost still need validation.
+
+## Release 1.4.1
+
+The overlay changes above ship in `Moonlight-PS4-01.41.pkg`, with runtime version
+1.4.1. The startup version toast remains removed. The release includes the PS4
+package and `SHA256SUMS`; the Windows companion is unchanged from 1.4.0.
+See [release notes](RELEASE_01_41.md).

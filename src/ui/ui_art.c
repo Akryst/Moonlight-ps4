@@ -67,6 +67,10 @@ void ui_control_image(ui_surface_t *s,int button,int x,int y,int size) {
         ui_label(s,x,y,size/2,0,ui_theme_current()->text,labels[button]);
     }
 }
+void ui_controls_preload(void){
+    uint32_t pixel=0;ui_surface_t surface={(uint8_t *)&pixel,4,1,1};
+    for(int i=0;i<UI_CONTROLS;i++)ui_control_image(&surface,i,0,0,1);
+}
 static unsigned read_be32(const unsigned char *p) {
     return (unsigned)p[0]<<24 | (unsigned)p[1]<<16 | (unsigned)p[2]<<8 | p[3];
 }

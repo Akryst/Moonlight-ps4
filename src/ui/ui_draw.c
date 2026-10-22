@@ -2,7 +2,6 @@
 #include "ui_font.h"
 
 #include <string.h>
-#include <math.h>
 #include "ui_font_sans_data.h"
 
 static uint32_t mix_pixel(uint32_t under, uint32_t over, unsigned a) {
@@ -268,57 +267,6 @@ void ui_text_fit(ui_surface_t *s, int x, int y, int scale, uint32_t argb,
     ui_label_fit(s,x,y,scale < 2 ? 18 : scale * 10,scale >= 4,argb,str,max_width);
 }
 
-void ui_ring_arc(ui_surface_t *s, int cx, int cy, int radius, int thickness,
-                 uint32_t color, int start_permille, int end_permille) {
-    if (radius <= 0 || thickness <= 0 || end_permille <= start_permille)
-        return;
-    if (end_permille > 1000)
-        end_permille = 1000;
-    if (start_permille < 0)
-        start_permille = 0;
-    if (end_permille - start_permille >= 1000)
-        start_permille = 0, end_permille = 1000;
-
-    float r_out = (float)radius + 0.5f;
-    float r_in = (float)radius - (float)thickness;
-    /* Angles measured clockwise from the top (screen y grows downward):
-     * sample angle = atan2(dx, -dy), 0 at 12 o'clock, +x is 3 o'clock. */
-    float a0 = (float)start_permille / 1000.0f * 6.2831853f;
-    float a1 = (float)end_permille / 1000.0f * 6.2831853f;
-    int full = (start_permille == 0 && end_permille == 1000);
-
-    int bbox = radius + 1;
-    for (int py = cy - bbox; py <= cy + bbox; py++) {
-        if (py < 0 || py >= s->h)
-            continue;
-        for (int px = cx - bbox; px <= cx + bbox; px++) {
-            if (px < 0 || px >= s->w)
-                continue;
-            unsigned cov = 0;
-            for (int sy = 0; sy < 4; sy++) {
-                for (int sx = 0; sx < 4; sx++) {
-                    float fx = (float)px + (sx * 2 + 1) * 0.125f;
-                    float fy = (float)py + (sy * 2 + 1) * 0.125f;
-                    float dx = fx - (float)cx, dy = fy - (float)cy;
-                    float d2 = dx * dx + dy * dy;
-                    if (d2 >= r_out * r_out || d2 <= r_in * r_in)
-                        continue;
-                    if (full) {
-                        cov++;
-                    } else {
-                        float ang = atan2f(dx, -dy);
-                        if (ang < 0)
-                            ang += 6.2831853f;
-                        if (ang >= a0 && ang <= a1)
-                            cov++;
-                    }
-                }
-            }
-            if (cov)
-                pixel(s, px, py, color, (cov * 255 + 8) / 16);
-        }
-    }
-}
 
 void ui_round_rect_alpha(ui_surface_t *s,int x,int y,int w,int h,int radius,uint32_t color,unsigned alpha){
     if(alpha>255)alpha=255;

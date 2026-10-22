@@ -12,3 +12,5 @@ void ui_art_draw_round(gs_server_t *server, int app_id, ui_surface_t *surface,
 void ui_landscape(ui_surface_t *surface, int x, int y, int w, int h, int radius);
 enum { UI_CROSS, UI_CIRCLE, UI_SQUARE, UI_TRIANGLE, UI_OPTIONS, UI_DPAD, UI_L1, UI_R1, UI_CONTROLS };
 void ui_control_image(ui_surface_t *surface,int button,int x,int y,int size);
+
+void ui_controls_preload(void);

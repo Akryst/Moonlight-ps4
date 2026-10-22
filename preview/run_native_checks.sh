@@ -36,3 +36,6 @@ build-tests/fork-flow-check
 
 clang "${common[@]}" preview/quick_menu_check.c src/ui/quick_menu.c -pthread -o build-tests/quick-menu-check
 build-tests/quick-menu-check
+
+clang "${common[@]}" preview/stream_overlay_check.c src/ui/ui_stream.c src/ui/ui_draw.c src/ui/ui_art.c src/ui/ui_theme.c -Wl,--gc-sections -pthread -lm -o build-tests/stream-overlay-check
+build-tests/stream-overlay-check

@@ -2,14 +2,14 @@
 
 # Moonlight PS4
 
-### 1.4.0
+### 1.4.1
 
 Your PC games, on your PS4. Built around a DualShock 4 and Sunshine.
 
-![Version](https://img.shields.io/badge/release-1.4.0-36CADB?style=flat-square&labelColor=172B40)
+![Version](https://img.shields.io/badge/release-1.4.1-36CADB?style=flat-square&labelColor=172B40)
 ![Platform](https://img.shields.io/badge/PS4-9.00%20%2F%20GoldHEN-0B1525?style=flat-square&labelColor=172B40)
 
-**[Download PKG](https://github.com/Akryst/Moonlight-ps4/releases/download/v1.4.0/Moonlight-PS4-01.40.pkg)** · **[Release notes and checksums](https://github.com/Akryst/Moonlight-ps4/releases/tag/v1.4.0)**
+**[Download PKG](https://github.com/Akryst/Moonlight-ps4/releases/download/v1.4.1/Moonlight-PS4-01.41.pkg)** · **[Release notes and checksums](https://github.com/Akryst/Moonlight-ps4/releases/tag/v1.4.1)**
 
 <img src="design/console/library-ps4-1.4.0.jpg" alt="Actual PS4 capture of the portrait library with Buckshot Roulette selected" width="960">
 
@@ -24,7 +24,22 @@ some breathing room, and the controller prompts are actual images.
 **1.4.0** brings the interface work and the controller/network updates together.
 There's still work to do, but this is a much nicer place to play from.
 
-## what's new
+## what's new in 1.4.1
+
+The extra overlays were clanked. This patch gives them the same quieter look as
+the library: a side panel, a clear selection, actual button images and text that
+has room to breathe. Statistics are smaller, with fixed columns for the numbers.
+
+There was also a real bug underneath the messy stats panel. It wrote five rows
+into space reserved for four. **That's fixed.** The new drawing code checks its
+history bounds and handles invalid timing values too. Controller images load
+before streaming, so drawing the overlays doesn't open or decode image files.
+
+The overlays currently use a fixed dark palette. They don't follow the selected
+menu theme. Host-rendered checks cover 1080p, 720p and 480p; appearance and frame
+cost on the PS4 still need validation. The 1.4.0 features below are all included.
+
+## the 1.4 update
 
 The library has portrait covers, game backgrounds, smoother focus movement and
 a splash transition when you open the app. Covers and the game list are cached
@@ -74,8 +89,8 @@ The tested console setup is an original PS4 on **firmware 9.00 with GoldHEN**,
 a DualShock 4 and a wired PC running [Sunshine](https://github.com/LizardByte/Sunshine).
 Other console and firmware combinations haven't been verified.
 
-1. Download `Moonlight-PS4-01.40.pkg` and `SHA256SUMS` from the
-   [1.4.0 release](https://github.com/Akryst/Moonlight-ps4/releases/tag/v1.4.0).
+1. Download `Moonlight-PS4-01.41.pkg` and `SHA256SUMS` from the
+   [1.4.1 release](https://github.com/Akryst/Moonlight-ps4/releases/tag/v1.4.1).
 2. Install the PKG through GoldHEN's Package Installer. The title ID is still
    `MLNT00001`, so it updates the existing app and keeps `/data/moonlight`.
 3. Open **Computers** and connect to your PC. Use Triangle to search or enter
@@ -86,9 +101,9 @@ A good starting point is **1080p, 60 FPS, 20,000 kbps, hardware decoding and
 Balanced mode**. Use Desktop for external launchers such as TruckersMP.
 
 For Steam library synchronization and installed Playnite detection, grab
-`Moonlight-PS4-Steam-Companion-01.40.zip` from the same release and follow
-[the companion setup](docs/STEAM.md). Existing companion installations need the
-updated scripts for Playnite support. Sunshine streaming also works without it.
+[the 1.4.0 Windows companion](https://github.com/Akryst/Moonlight-ps4/releases/download/v1.4.0/Moonlight-PS4-Steam-Companion-01.40.zip) and follow
+[the companion setup](docs/STEAM.md). The companion hasn't changed in 1.4.1. If you already updated it for 1.4.0,
+you're set. Older installations need the updated scripts for Playnite support. Sunshine streaming also works without it.
 
 ## controls
 

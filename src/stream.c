@@ -12,6 +12,7 @@
 #include "video/video.h"
 #include "input/input_pad.h"
 #include "ui/ui_menu.h"
+#include "ui/ui_art.h"
 #include "ui/ui_draw.h"
 #include "ui/ui_theme.h"
 #include "ui/quick_menu.h"
@@ -629,6 +630,7 @@ static int stream_reconnect(app_config_t *cfg, int app_id,
  * instead of dropping back to the menu with a notice to find the game
  * and click it again. */
 static int stream_play(app_config_t *cfg, const char *config_dir) {
+    ui_controls_preload();
     input_set_preferences(cfg->controller_deadzone,cfg->swap_face_buttons);
     cfg->stream.audioConfiguration=cfg->surround51?AUDIO_CONFIGURATION_51_SURROUND:AUDIO_CONFIGURATION_STEREO;
     s_connected = 0;

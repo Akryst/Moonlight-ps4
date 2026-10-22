@@ -38,6 +38,5 @@ void ui_image_alpha(ui_surface_t *s, int x, int y, int w, int h,
 void ui_crossfade(ui_surface_t *dst, const ui_surface_t *from,
                   const ui_surface_t *to, unsigned amount);
 
-void ui_ring_arc(ui_surface_t *s,int cx,int cy,int radius,int thick,uint32_t color,int start,int extent);
 
 void ui_round_rect_alpha(ui_surface_t *s,int x,int y,int w,int h,int radius,uint32_t color,unsigned alpha);
