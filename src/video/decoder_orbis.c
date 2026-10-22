@@ -606,6 +606,12 @@ static int dr_submit_impl(PDECODE_UNIT du) {
     if (total <= 0)
         return DR_OK;
 
+    /* network metrics for the perf overlay's Network line. */
+    if (du->enqueueTimeUs >= du->receiveTimeUs)
+        video_stats_add_net((unsigned long long)du->fullLength,
+                            du->enqueueTimeUs - du->receiveTimeUs,
+                            du->frameHostProcessingLatency);
+
     /*
      * Always Decode (H.264 chain / refs). Only skip bounce+present if the
      * flip queue is truly backed up or the decoder queue is late — otherwise: tearing and

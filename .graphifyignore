@@ -1,0 +1,9 @@
+third_party/
+vendor/
+dist/
+work/
+profile-readme/
+design/
+pkg/assets/
+plugin/bin/
+graphify-out/

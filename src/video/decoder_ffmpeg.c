@@ -144,6 +144,12 @@ static int dr_submit(PDECODE_UNIT du) {
     if (total <= 0)
         return DR_OK;
 
+    /* network metrics for the perf overlay's Network line. */
+    if (du->enqueueTimeUs >= du->receiveTimeUs)
+        video_stats_add_net((unsigned long long)du->fullLength,
+                            du->enqueueTimeUs - du->receiveTimeUs,
+                            du->frameHostProcessingLatency);
+
     /* Always decode; skip present only if late / flip busy. */
     int skip_present = 0;
     if (du->presentationTimeUs) {

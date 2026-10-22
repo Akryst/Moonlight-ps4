@@ -60,18 +60,10 @@ void ui_theme_background(ui_surface_t *s) {
     }
 }
 void ui_theme_splash(ui_surface_t *s) {
-    const ui_theme_t *t = ui_theme_current();
+    const ui_theme_t *t=ui_theme_current();
     ui_theme_background(s);
-    if(s_index==0||s_index==4) {
-        ui_landscape(s,0,0,s->w,s->h,0);
-        ui_overlay(s,0,0,s->w,s->h,t->bg,s_index==0?70:125);
-    }
-    int cx=s->w/2,cy=350;
-    ui_moonlight_logo(s,cx,cy,112,t->text);
-    int size=s_index==1?60:54;
-    const char *title="M O O N L I G H T";
-    ui_label(s,cx-ui_label_w(size,0,title)/2,530,size,0,t->text,title);
-    ui_label(s,cx-ui_label_w(32,0,"PS4")/2,615,32,0,s_index==1?t->dim:t->accent,"PS4");
-    if(s_index==3)ui_rect(s,cx-25,705,50,4,t->accent);
-    ui_label(s,cx-ui_label_w(28,0,"Starting...")/2,850,28,0,t->dim,"Starting...");
+    const int cx=s->w/2;
+    ui_moonlight_logo(s,cx,414,86,t->text);
+    ui_label(s,cx-ui_label_w(60,0,"moonlight")/2,554,60,0,t->text,"moonlight");
+    ui_label(s,cx-ui_label_w(26,0,"PS4")/2,642,26,0,t->dim,"PS4");
 }

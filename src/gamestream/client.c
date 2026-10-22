@@ -5,6 +5,7 @@
 #include "client.h"
 #include "gs_http.h"
 #include "gs_errors.h"
+#include "discovery.h" /* wol_mac_parse / wol_mac_format (mac normalizing) */
 #include "../log.h"
 
 #include <mbedtls/sha1.h>
@@ -53,8 +54,10 @@ static int sign_message(client_identity_t *id, const unsigned char *msg, size_t 
                         unsigned char *sig, size_t sig_size, size_t *slen) {
     unsigned char hash[32];
     mbedtls_sha256(msg, mlen, hash, 0);
+    pthread_mutex_lock(&identity_crypto_mutex);
     int ret = mbedtls_pk_sign(&id->key, MBEDTLS_MD_SHA256, hash, sizeof(hash),
                               sig, sig_size, slen, mbedtls_ctr_drbg_random, &id->rng);
+    pthread_mutex_unlock(&identity_crypto_mutex);
     return ret == 0 ? GS_OK : GS_FAILED;
 }
 
@@ -100,6 +103,52 @@ static int api_get(gs_server_t *server, int https, http_resp_t *resp,
                     https, path, resp);
 }
 
+/* Same, with an explicit per-request timeout (the timeout is a
+ * request parameter now — global state could be clobbered by concurrent
+ * threads mid-request, one request resetting
+ * another's budget while it queued was observed on hardware). */
+__attribute__((format(printf, 5, 6)))
+static int api_get_t(gs_server_t *server, int https, http_resp_t *resp,
+                     unsigned timeout_ms, const char *fmt, ...) {
+    char path[8192];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(path, sizeof(path), fmt, ap);
+    va_end(ap);
+    if (n <= 0 || n >= (int)sizeof(path)) {
+        gs_error = "Request too long";
+        return GS_INVALID;
+    }
+    return http_get_timeout(server->address,
+                            https ? server->httpsPort : server->httpPort,
+                            https, path, resp, HTTP_FLAG_NONE, timeout_ms);
+}
+
+/* Same, but on a dedicated (non-pooled) connection. For state-changing
+ * endpoints (launch/resume/cancel): never auto-retried by the HTTP layer,
+ * and never written onto a possibly half-closed pooled socket where the
+ * request could be silently delivered while the client treats it as
+ * failed ("streaming failed although the game started on the host"). */
+__attribute__((format(printf, 5, 6)))
+static int api_get_fresh(gs_server_t *server, int https, http_resp_t *resp,
+                         unsigned timeout_ms, const char *fmt, ...) {
+    char path[8192];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(path, sizeof(path), fmt, ap);
+    va_end(ap);
+    if (n <= 0 || n >= (int)sizeof(path)) {
+        gs_error = "Request too long";
+        return GS_INVALID;
+    }
+    /* Fresh connection + per-request timeout: Sunshine (and forks) can
+     * block on /launch while the app process starts, and this request
+     * must never ride a pooled socket that the server may have closed. */
+    return http_get_timeout(server->address,
+                            https ? server->httpsPort : server->httpPort,
+                            https, path, resp, HTTP_FLAG_FRESH, timeout_ms);
+}
+
 // Check status_code and extract a field from the XML.
 static int xml_get_field(http_resp_t *resp, const char *field, char **out) {
     *out = NULL;
@@ -110,12 +159,33 @@ static int xml_get_field(http_resp_t *resp, const char *field, char **out) {
     return xml_search(resp->body, resp->len, field, out);
 }
 
+/* normalize + sanity-check a <mac> serverinfo field. Accepts the
+ * ':'/'-'/space-separated (or bare 12-hex) forms; rejects the all-zero
+ * placeholder Sunshine sends to unpaired/HTTP callers (and that would
+ * wake nothing anyway). On success out is "AA:BB:CC:DD:EE:FF" (needs
+ * >= 18 bytes). Exported for the host unit tests. */
+int gs_mac_from_field(const char *raw, char *out, size_t cap) {
+    if (!raw || !out || cap < 18)
+        return -1;
+    out[0] = '\0';
+    uint8_t mac[6];
+    /* wol_mac_parse (discovery.c) accepts every separator style and
+     * rejects short/garbage input. */
+    if (wol_mac_parse(raw, mac) != 0)
+        return -1;
+    if (!mac[0] && !mac[1] && !mac[2] && !mac[3] && !mac[4] && !mac[5])
+        return -1;
+    wol_mac_format(mac, out, cap);
+    return 0;
+}
+
 static int load_serverinfo(gs_server_t *server, bool https) {
     char uuid[37];
     http_resp_t resp;
     int ret = GS_INVALID;
     char *paired = NULL, *currentGame = NULL, *state = NULL, *httpsPort = NULL;
     char *appversion = NULL, *gfeversion = NULL, *codecMode = NULL;
+    char *mac = NULL;
 
     uuid_v4(server->id, uuid);
     ret = api_get(server, https, &resp,
@@ -141,6 +211,16 @@ static int load_serverinfo(gs_server_t *server, bool https) {
     xml_search(resp.body, resp.len, "HttpsPort", &httpsPort);
     xml_search(resp.body, resp.len, "GfeVersion", &gfeversion);
     xml_search(resp.body, resp.len, "ServerCodecModeSupport", &codecMode);
+    /* Sunshine tells PAIRED clients the streaming PC's MAC over
+     * HTTPS (nvhttp.cpp root.mac; plain-HTTP callers get the
+     * 00:00:00:00:00:00 placeholder, filtered by gs_mac_from_field) so
+     * the Wake-on-LAN setting can be filled without typing 12 hex
+     * digits. */
+    if (xml_search(resp.body, resp.len, "mac", &mac) == GS_OK) {
+        char norm[24];
+        if (gs_mac_from_field(mac, norm, sizeof(norm)) == 0)
+            snprintf(server->host_mac, sizeof(server->host_mac), "%s", norm);
+    }
 
     server->paired = !strcmp(paired, "1");
     server->currentGame = atoi(currentGame);
@@ -169,6 +249,7 @@ out:
     free(appversion);
     free(gfeversion);
     free(codecMode);
+    free(mac);
     http_resp_free(&resp);
     return ret;
 }
@@ -225,7 +306,7 @@ static int check_paired(http_resp_t *resp) {
     return ret;
 }
 
-int gs_pair(gs_server_t *server, const char *pin) {
+int gs_pair_ex(gs_server_t *server, const char *pin, unsigned timeout_ms) {
     int ret;
     char uuid[37];
     http_resp_t resp = {0};
@@ -251,7 +332,7 @@ int gs_pair(gs_server_t *server, const char *pin) {
     bytes_to_hex(salt, salt_hex, sizeof(salt));
 
     uuid_v4(id, uuid);
-    ret = api_get(server, 0, &resp,
+    ret = api_get_t(server, 0, &resp, timeout_ms,
                   "/pair?uniqueid=%s&uuid=%s&devicename=roth&updateState=1"
                   "&phrase=getservercert&salt=%s&clientcert=%s",
                   GS_UNIQUEID, uuid, salt_hex, id->cert_hex);
@@ -312,7 +393,7 @@ int gs_pair(gs_server_t *server, const char *pin) {
     bytes_to_hex(challenge_enc, challenge_hex, sizeof(challenge_enc));
 
     uuid_v4(id, uuid);
-    ret = api_get(server, 0, &resp,
+    ret = api_get_t(server, 0, &resp, timeout_ms,
                   "/pair?uniqueid=%s&uuid=%s&devicename=roth&updateState=1"
                   "&clientchallenge=%s",
                   GS_UNIQUEID, uuid, challenge_hex);
@@ -341,6 +422,14 @@ int gs_pair(gs_server_t *server, const char *pin) {
         goto fail_resp;
     }
     hex_to_bytes(result, challresp_enc, &challresp_len);
+    /* Validate before decrypting/reading: Sunshine sends 64 bytes
+     * (hash || server challenge), but a broken or hostile reply must not
+     * read past the buffer. */
+    if (challresp_len < (size_t)hash_len + 16 || (challresp_len & 15u) != 0) {
+        gs_error = "Server sent a malformed challenge response";
+        ret = GS_FAILED;
+        goto fail_resp;
+    }
     aes_ecb(0, aes_key, challresp_enc, challresp_len, challresp);
     free(result);
     result = NULL;
@@ -377,7 +466,7 @@ int gs_pair(gs_server_t *server, const char *pin) {
     bytes_to_hex(cr_hash_enc, cr_hex, 32);
 
     uuid_v4(id, uuid);
-    ret = api_get(server, 0, &resp,
+    ret = api_get_t(server, 0, &resp, timeout_ms,
                   "/pair?uniqueid=%s&uuid=%s&devicename=roth&updateState=1"
                   "&serverchallengeresp=%s",
                   GS_UNIQUEID, uuid, cr_hex);
@@ -438,7 +527,7 @@ int gs_pair(gs_server_t *server, const char *pin) {
     bytes_to_hex(client_pairing_secret, cps_hex, 16 + sig_len);
 
     uuid_v4(id, uuid);
-    ret = api_get(server, 0, &resp,
+    ret = api_get_t(server, 0, &resp, timeout_ms,
                   "/pair?uniqueid=%s&uuid=%s&devicename=roth&updateState=1"
                   "&clientpairingsecret=%s",
                   GS_UNIQUEID, uuid, cps_hex);
@@ -452,7 +541,7 @@ int gs_pair(gs_server_t *server, const char *pin) {
 
     // --- HTTPS confirmation with client certificate
     uuid_v4(id, uuid);
-    ret = api_get(server, 1, &resp,
+    ret = api_get_t(server, 1, &resp, timeout_ms,
                   "/pair?uniqueid=%s&uuid=%s&devicename=roth&updateState=1"
                   "&phrase=pairchallenge",
                   GS_UNIQUEID, uuid);
@@ -462,6 +551,11 @@ int gs_pair(gs_server_t *server, const char *pin) {
         goto fail;
 
     server->paired = true;
+    /* Pairing succeeded: clear the error string so a later status print
+     * does not show a stale failure from an earlier phase (a stale
+     * "No response from server" would otherwise print right after a
+     * successful handshake). */
+    gs_error = NULL;
     LOGI("pairing: completed");
     LOGI("pair DONE");
     return GS_OK;
@@ -470,8 +564,21 @@ fail_resp:
     free(result);
     http_resp_free(&resp);
 fail:
-    gs_unpair(server);
+    /* Preserve the pairing failure reason: gs_unpair overwrites gs_error
+     * with its own result (usually a follow-up failure), which used to
+     * mask the real cause reported to the user. */
+    {
+        const char *pair_error = gs_error;
+        (void)gs_unpair(server);
+        gs_error = pair_error;
+    }
     return ret;
+}
+
+int gs_pair(gs_server_t *server, const char *pin) {
+    /* Legacy budget: the PIN screen waits for the user to type the PIN
+     * into Sunshine, so pairing phases get a long leash (120 s). */
+    return gs_pair_ex(server, pin, 120000);
 }
 
 int gs_unpair(gs_server_t *server) {
@@ -506,12 +613,22 @@ int gs_appasset(gs_server_t *server, int app_id, unsigned char **bytes, size_t *
 }
 
 int gs_applist(gs_server_t *server, app_entry_t **list) {
+    return gs_applist_ex(server->id, server->address, server->httpsPort, list);
+}
+
+/* Race-free variant for background threads: uses explicit host/port and the
+ * identity captured at spawn time instead of dereferencing gs_server_t,
+ * which the main thread may re-initialize (gs_init) while a menu is closed. */
+int gs_applist_ex(client_identity_t *id, const char *address,
+                  unsigned short https_port, app_entry_t **list) {
     char uuid[37];
+    char path[256];
     http_resp_t resp;
 
-    uuid_v4(server->id, uuid);
-    int ret = api_get(server, 1, &resp, "/applist?uniqueid=%s&uuid=%s",
-                      GS_UNIQUEID, uuid);
+    uuid_v4(id, uuid);
+    snprintf(path, sizeof(path), "/applist?uniqueid=%s&uuid=%s",
+             GS_UNIQUEID, uuid);
+    int ret = http_get(address, https_port, 1, path, &resp);
     if (ret != GS_OK)
         return ret;
 
@@ -523,6 +640,25 @@ int gs_applist(gs_server_t *server, app_entry_t **list) {
     }
     http_resp_free(&resp);
     return ret;
+}
+
+/* put the PC's own answer in gs_error, whitespace-
+ * flattened and bounded - shown as "Could not start the game. (the PC
+ * replied: ...)" on the launch fail screen. */
+static void compose_reply_error(const char *text) {
+    char *reply=gs_error_buffer();
+    const char *src = text ? text : "";
+    char clean[144];
+    size_t o = 0;
+    for (size_t i = 0; src[i] && o < sizeof(clean) - 1; i++) {
+        char ch = src[i];
+        if (ch == '\r' || ch == '\n' || ch == '\t')
+            ch = ' ';
+        clean[o++] = ch;
+    }
+    clean[o] = '\0';
+    snprintf(reply, 512, "the PC replied: %s", clean);
+    gs_error = reply;
 }
 
 int gs_start_app(gs_server_t *server, STREAM_CONFIGURATION *config, int appId,
@@ -550,7 +686,10 @@ int gs_start_app(gs_server_t *server, STREAM_CONFIGURATION *config, int appId,
     int surround_info = SURROUNDAUDIOINFO_FROM_AUDIO_CONFIGURATION(config->audioConfiguration);
 
     uuid_v4(server->id, uuid);
-    ret = api_get(server, 1, &resp,
+    /* Fresh connection + generous timeout: Sunshine (and forks) can block
+     * on /launch while the app process starts, and this request must never
+     * ride a pooled socket that the server may have closed. */
+    ret = api_get_fresh(server, 1, &resp, 15000,
                   "/%s?uniqueid=%s&uuid=%s&appid=%d&mode=%dx%dx%d"
                   "&additionalStates=1&sops=%d&rikey=%s&rikeyid=%u"
                   "&localAudioPlayMode=%d&surroundAudioInfo=%d"
@@ -562,13 +701,30 @@ int gs_start_app(gs_server_t *server, STREAM_CONFIGURATION *config, int appId,
                   localaudio ? 1 : 0, surround_info,
                   gamepad_mask, gamepad_mask,
                   LiGetLaunchUrlQueryParameters());
-    if (ret != GS_OK)
+    if (ret != GS_OK) {
+        /* Non-200 (or transport error). A body means the host EXPLAINED
+         * itself (Sunshine: "app is locked", "not available", a PIN
+         * prompt on some forks); log it and surface the PC's words instead
+         * of the HTTP layer's generic "Server returned an HTTP error".
+         * Transport failures carry no body and keep their specific reason. */
+        if (resp.body && resp.len) {
+            LOGW("launch error body: %.120s", resp.body);
+            char *msg = NULL;
+            xml_search(resp.body, resp.len, "root", &msg);
+            compose_reply_error(msg && msg[0] ? msg : resp.body);
+            free(msg);
+        }
+        http_resp_free(&resp);
         return ret;
+    }
 
     if (xml_status(resp.body, resp.len) != 200) {
         char *msg = NULL;
         xml_search(resp.body, resp.len, "root", &msg);
-        gs_error = "launch returned an error status";
+        /* HTTP 200 but an XML error code: same treatment - the answer is
+         * the message. */
+        LOGW("launch error body: %.120s", resp.body ? resp.body : "");
+        compose_reply_error(msg && msg[0] ? msg : (resp.body ? resp.body : ""));
         free(msg);
         ret = GS_ERROR;
         goto out;
@@ -607,8 +763,11 @@ int gs_quit_app(gs_server_t *server) {
     char *result = NULL;
 
     uuid_v4(server->id, uuid);
-    int ret = api_get(server, 1, &resp, "/cancel?uniqueid=%s&uuid=%s",
-                      GS_UNIQUEID, uuid);
+    /* Fresh connection: /cancel stops the running app; a ghost duplicate
+     * from a retried stale socket would kill a session we meant to keep. */
+    int ret = api_get_fresh(server, 1, &resp, 10000,
+                            "/cancel?uniqueid=%s&uuid=%s",
+                            GS_UNIQUEID, uuid);
     if (ret != GS_OK)
         return ret;
 
@@ -635,5 +794,80 @@ int gs_refresh_status(gs_server_t *server) {
     int ret = load_serverinfo(server, https);
     if (ret != GS_OK && https)
         ret = load_serverinfo(server, false);
+    return ret;
+}
+
+/* Lightweight serverinfo query for background threads (same race-free
+ * capture rules as gs_applist_ex). Reports paired state and the running
+ * app. Prefers the paired HTTPS view: Sunshine's plain-HTTP serverinfo
+ * always answers PairStatus=0 (it cannot authenticate the client there),
+ * which used to overwrite the live server state with paired=false and
+ * lose currentGame for the menu/launch logic. Falls back to HTTP when
+ * HTTPS is unavailable (e.g. pre-pairing first run).
+ * host_mac_out (may be NULL) receives the PC's MAC when the
+ * paired HTTPS view reports one ("" otherwise) - the menu refresh can
+ * then adopt it for Wake-on-LAN without waiting for a connect. */
+int gs_serverinfo_status(client_identity_t *id, const char *address,
+                         unsigned short https_port, unsigned short http_port,
+                         bool *paired, int *current_game,
+                         char *host_mac_out, size_t host_mac_cap) {
+    char uuid[37];
+    char path[512];
+    http_resp_t resp;
+    int ret = GS_INVALID;
+    char *paired_str = NULL, *current = NULL, *state = NULL, *mac = NULL;
+
+    *paired = false;
+    *current_game = 0;
+    if (host_mac_out && host_mac_cap)
+        host_mac_out[0] = '\0';
+    uuid_v4(id, uuid);
+    snprintf(path, sizeof(path), "/serverinfo?uniqueid=%s&uuid=%s",
+             GS_UNIQUEID, uuid);
+
+    ret = GS_INVALID;
+    if (https_port) {
+        ret = http_get(address, https_port, 1, path, &resp);
+        if (ret == GS_OK)
+            goto parse;
+        /* Unpaired or HTTPS filtered: try the plain view. */
+        LOGW("status: HTTPS serverinfo failed (%s); trying HTTP",
+             gs_error ? gs_error : "?");
+    }
+    ret = http_get(address, http_port, 0, path, &resp);
+    if (ret != GS_OK)
+        return ret;
+
+parse:
+    ret = GS_INVALID;
+    if (xml_status(resp.body, resp.len) != 200) {
+        gs_error = "serverinfo returned an error status";
+        goto out;
+    }
+    if (xml_search(resp.body, resp.len, "PairStatus", &paired_str) != GS_OK ||
+        xml_search(resp.body, resp.len, "currentgame", &current) != GS_OK)
+        goto out;
+    xml_search(resp.body, resp.len, "state", &state);
+
+    /* Same placeholder filter as load_serverinfo: unpaired/HTTP callers
+     * get 00:00:00:00:00:00, which never adopts. */
+    if (host_mac_out && host_mac_cap >= 18 &&
+        xml_search(resp.body, resp.len, "mac", &mac) == GS_OK) {
+        if (gs_mac_from_field(mac, host_mac_out, (size_t)host_mac_cap) != 0)
+            host_mac_out[0] = '\0';
+    }
+
+    *paired = paired_str && !strcmp(paired_str, "1");
+    *current_game = atoi(current);
+    if (!state || !strstr(state, "_SERVER_BUSY"))
+        *current_game = 0; /* after GFE 2.8 currentgame stays set while idle */
+    ret = GS_OK;
+
+out:
+    free(paired_str);
+    free(current);
+    free(state);
+    free(mac);
+    http_resp_free(&resp);
     return ret;
 }

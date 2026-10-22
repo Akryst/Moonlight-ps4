@@ -2,6 +2,7 @@
 #include "ui_font.h"
 
 #include <string.h>
+#include <math.h>
 #include "ui_font_sans_data.h"
 
 static uint32_t mix_pixel(uint32_t under, uint32_t over, unsigned a) {
@@ -15,6 +16,24 @@ static void pixel(ui_surface_t *s, int x, int y, uint32_t color, unsigned alpha)
     if ((unsigned)x >= (unsigned)s->w || (unsigned)y >= (unsigned)s->h) return;
     uint32_t *p = (uint32_t *)(void *)(s->fb + (size_t)y * s->pitch) + x;
     *p = mix_pixel(*p, color, alpha);
+}
+void ui_image_alpha(ui_surface_t *s,int x,int y,int w,int h,const uint8_t *rgba,int iw,int ih) {
+    if(!rgba || w<=0 || h<=0 || iw<=0 || ih<=0)return;
+    for(int r=0;r<h;r++)for(int c=0;c<w;c++) {
+        const uint8_t *p=rgba+((size_t)(r*(long long)ih/h)*iw+c*(long long)iw/w)*4;
+        if(p[3])pixel(s,x+c,y+r,((uint32_t)p[0]<<16)|((uint32_t)p[1]<<8)|p[2],p[3]);
+    }
+}
+void ui_crossfade(ui_surface_t *dst,const ui_surface_t *from,const ui_surface_t *to,unsigned amount) {
+    if(!dst || !from || !to || !dst->fb || !from->fb || !to->fb ||
+       dst->w!=from->w || dst->h!=from->h || dst->w!=to->w || dst->h!=to->h)return;
+    if(amount>255)amount=255;
+    for(int y=0;y<dst->h;y++) {
+        uint32_t *d=(uint32_t *)(void *)(dst->fb+(size_t)y*dst->pitch);
+        const uint32_t *a=(const uint32_t *)(const void *)(from->fb+(size_t)y*from->pitch);
+        const uint32_t *b=(const uint32_t *)(const void *)(to->fb+(size_t)y*to->pitch);
+        for(int x=0;x<dst->w;x++)d[x]=mix_pixel(a[x],b[x],amount);
+    }
 }
 static unsigned next_char(const char **text) {
     unsigned c = (unsigned char)*(*text)++;
@@ -247,4 +266,66 @@ int ui_text_w(int scale, const char *str) {
 void ui_text_fit(ui_surface_t *s, int x, int y, int scale, uint32_t argb,
                  const char *str, int max_width) {
     ui_label_fit(s,x,y,scale < 2 ? 18 : scale * 10,scale >= 4,argb,str,max_width);
+}
+
+void ui_ring_arc(ui_surface_t *s, int cx, int cy, int radius, int thickness,
+                 uint32_t color, int start_permille, int end_permille) {
+    if (radius <= 0 || thickness <= 0 || end_permille <= start_permille)
+        return;
+    if (end_permille > 1000)
+        end_permille = 1000;
+    if (start_permille < 0)
+        start_permille = 0;
+    if (end_permille - start_permille >= 1000)
+        start_permille = 0, end_permille = 1000;
+
+    float r_out = (float)radius + 0.5f;
+    float r_in = (float)radius - (float)thickness;
+    /* Angles measured clockwise from the top (screen y grows downward):
+     * sample angle = atan2(dx, -dy), 0 at 12 o'clock, +x is 3 o'clock. */
+    float a0 = (float)start_permille / 1000.0f * 6.2831853f;
+    float a1 = (float)end_permille / 1000.0f * 6.2831853f;
+    int full = (start_permille == 0 && end_permille == 1000);
+
+    int bbox = radius + 1;
+    for (int py = cy - bbox; py <= cy + bbox; py++) {
+        if (py < 0 || py >= s->h)
+            continue;
+        for (int px = cx - bbox; px <= cx + bbox; px++) {
+            if (px < 0 || px >= s->w)
+                continue;
+            unsigned cov = 0;
+            for (int sy = 0; sy < 4; sy++) {
+                for (int sx = 0; sx < 4; sx++) {
+                    float fx = (float)px + (sx * 2 + 1) * 0.125f;
+                    float fy = (float)py + (sy * 2 + 1) * 0.125f;
+                    float dx = fx - (float)cx, dy = fy - (float)cy;
+                    float d2 = dx * dx + dy * dy;
+                    if (d2 >= r_out * r_out || d2 <= r_in * r_in)
+                        continue;
+                    if (full) {
+                        cov++;
+                    } else {
+                        float ang = atan2f(dx, -dy);
+                        if (ang < 0)
+                            ang += 6.2831853f;
+                        if (ang >= a0 && ang <= a1)
+                            cov++;
+                    }
+                }
+            }
+            if (cov)
+                pixel(s, px, py, color, (cov * 255 + 8) / 16);
+        }
+    }
+}
+
+void ui_round_rect_alpha(ui_surface_t *s,int x,int y,int w,int h,int radius,uint32_t color,unsigned alpha){
+    if(alpha>255)alpha=255;
+    if(radius<0)radius=0;if(radius>w/2)radius=w/2;if(radius>h/2)radius=h/2;
+    for(int row=0;row<h;row++)for(int col=0;col<w;col++){
+        int dx=col<radius?radius-col:col>=w-radius?col-(w-radius-1):0;
+        int dy=row<radius?radius-row:row>=h-radius?row-(h-radius-1):0;
+        if(dx*dx+dy*dy<=radius*radius)pixel(s,x+col,y+row,color,alpha);
+    }
 }

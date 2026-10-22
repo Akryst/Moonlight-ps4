@@ -35,8 +35,9 @@ void config_set_defaults(app_config_t *cfg) {
     cfg->prefer_hw = true;
     cfg->videodec2_spike = false;
     cfg->prefer_ycbcr = false;
-    cfg->enable_file_log = false;
+    cfg->enable_file_log = true; // default ON for fresh configs; saved configs keep their value
     cfg->show_stats = false;
+    cfg->controller_deadzone = 8;
     cfg->dec_pipeline_depth = 2;
     cfg->dec_thread_prio = 700;
     cfg->slices_per_frame = 2;
@@ -44,6 +45,13 @@ void config_set_defaults(app_config_t *cfg) {
     cfg->dec_fb_garlic = false;
     cfg->bgra_workers = 4;
     cfg->bgra_nt = -1;
+    cfg->autostart = false;
+    cfg->ui_theme = 0;
+    cfg->wol_mac[0] = '\0';      /* WOL off until the user sets a MAC */
+    cfg->wol_auto = false;        /* provenance flag (host vs. manual) */
+    cfg->surround51 = false;     /* stereo is the safe default on any TV/AVR */
+    cfg->touchpad_mouse = true;  /* natural for Desktop; games never touch it */
+    cfg->gyro_motion = true;     /* motion aiming works out of the box */
     snprintf(cfg->app_name, sizeof(cfg->app_name), "Steam Big Picture");
 }
 
@@ -73,7 +81,7 @@ static int parse_bool(const char *v) {
 
 int config_load(app_config_t *cfg, const char *dir) {
     char path[512];
-    char line[512];
+    char line[2048];
 
     config_set_defaults(cfg);
     LOGI("config_load: dir=%s", dir);
@@ -126,6 +134,16 @@ int config_load(app_config_t *cfg, const char *dir) {
         }
         else if (!strcmp(key, "app"))
             snprintf(cfg->app_name, sizeof(cfg->app_name), "%s", val);
+        else if (!strcmp(key, "last_app"))
+            snprintf(cfg->last_app, sizeof(cfg->last_app), "%s", val);
+        else if (!strcmp(key, "reduced_motion"))
+            cfg->reduced_motion = parse_bool(val);
+        else if (!strcmp(key, "swap_face_buttons"))
+            cfg->swap_face_buttons = parse_bool(val);
+        else if (!strcmp(key, "controller_deadzone")) {
+            int deadzone=atoi(val);
+            if(deadzone>=0 && deadzone<=25)cfg->controller_deadzone=deadzone;
+        }
         else if (!strcmp(key, "debug_host"))
             snprintf(cfg->debug_host, sizeof(cfg->debug_host), "%s", val);
         else if (!strcmp(key, "width"))
@@ -152,10 +170,26 @@ int config_load(app_config_t *cfg, const char *dir) {
             cfg->enable_file_log = parse_bool(val);
         else if (!strcmp(key, "show_stats"))
             cfg->show_stats = parse_bool(val);
+        else if (!strcmp(key, "autostart"))
+            cfg->autostart = parse_bool(val);
         else if (!strcmp(key, "ui_theme")) {
             int theme = atoi(val);
             cfg->ui_theme = theme >= 0 && theme < 5 ? theme : 0;
         }
+        else if (!strcmp(key, "wol_mac")) {
+            snprintf(cfg->wol_mac, sizeof(cfg->wol_mac), "%s", val);
+        }
+        else if (!strcmp(key, "wol_auto")) {
+            cfg->wol_auto = parse_bool(val);
+        }
+        else if (!strcmp(key, "surround51"))
+            cfg->surround51 = parse_bool(val);
+        else if (!strcmp(key, "touchpad_mouse"))
+            cfg->touchpad_mouse = parse_bool(val);
+        else if (!strcmp(key,"motion_disabled_apps"))
+            snprintf(cfg->motion_disabled_apps,sizeof(cfg->motion_disabled_apps),"%s",val);
+        else if (!strcmp(key, "gyro_motion"))
+            cfg->gyro_motion = parse_bool(val);
         else if (!strcmp(key, "dec_pipeline_depth"))
             cfg->dec_pipeline_depth = atoi(val);
         else if (!strcmp(key, "dec_thread_prio"))
@@ -203,7 +237,7 @@ int config_load(app_config_t *cfg, const char *dir) {
 int config_save(const app_config_t *cfg, const char *dir) {
     char path[512];
     config_ensure_dir(dir);
-    snprintf(path, sizeof(path), "%s/moonlight.ini", dir);
+    snprintf(path, sizeof(path), "%s/moonlight.ini.tmp", dir);
     FILE *f = fopen(path, "w");
     if (!f) {
         LOGE("config: could not write %s", path);
@@ -211,10 +245,14 @@ int config_save(const app_config_t *cfg, const char *dir) {
     }
     fprintf(f,
             "# moonlight-ps4\n"
-            "cfg_rev = 2\n"
+            "cfg_rev = 3\n"
             "host = %s\n"
             "http_port = %u\n"
             "app = %s\n"
+            "last_app = %s\n"
+            "reduced_motion = %s\n"
+            "controller_deadzone = %d\n"
+            "swap_face_buttons = %s\n"
             "debug_host = %s\n"
             "width = %d\n"
             "height = %d\n"
@@ -228,7 +266,14 @@ int config_save(const app_config_t *cfg, const char *dir) {
             "prefer_ycbcr = %s\n"
             "enable_file_log = %s\n"
             "show_stats = %s\n"
+            "autostart = %s\n"
             "ui_theme = %d\n"
+            "wol_mac = %s\n"
+            "wol_auto = %s\n"
+            "surround51 = %s\n"
+            "touchpad_mouse = %s\n"
+            "motion_disabled_apps = %s\n"
+            "gyro_motion = %s\n"
             "dec_pipeline_depth = %d\n"
             "dec_thread_prio = %d\n"
             "slices_per_frame = %d\n"
@@ -236,7 +281,8 @@ int config_save(const app_config_t *cfg, const char *dir) {
             "dec_fb_garlic = %s\n"
             "bgra_workers = %d\n"
             "bgra_nt = %d\n",
-            cfg->host, (unsigned)cfg->http_port, cfg->app_name, cfg->debug_host,
+            cfg->host, (unsigned)cfg->http_port, cfg->app_name,
+            cfg->last_app,cfg->reduced_motion?"true":"false",cfg->controller_deadzone,cfg->swap_face_buttons?"true":"false",cfg->debug_host,
             cfg->stream.width, cfg->stream.height, cfg->stream.fps, cfg->stream.bitrate,
             cfg->stream.packetSize,
             cfg->sops ? "true" : "false",
@@ -246,11 +292,43 @@ int config_save(const app_config_t *cfg, const char *dir) {
             cfg->prefer_ycbcr ? "true" : "false",
             cfg->enable_file_log ? "true" : "false",
             cfg->show_stats ? "true" : "false",
+            cfg->autostart ? "true" : "false",
             cfg->ui_theme,
+            cfg->wol_mac,
+            cfg->wol_auto ? "true" : "false",
+            cfg->surround51 ? "true" : "false",
+            cfg->touchpad_mouse ? "true" : "false",
+            cfg->motion_disabled_apps,
+            cfg->gyro_motion ? "true" : "false",
             cfg->dec_pipeline_depth, cfg->dec_thread_prio, cfg->slices_per_frame,
             cfg->dec_au_onion ? "true" : "false",
             cfg->dec_fb_garlic ? "true" : "false",
             cfg->bgra_workers, cfg->bgra_nt);
-    fclose(f);
+    int failed=ferror(f);
+    if(fclose(f)!=0)failed=1;
+    char destination[512];snprintf(destination,sizeof(destination),"%s/moonlight.ini",dir);
+    if(failed || rename(path,destination)!=0){remove(path);return -1;}
     return 0;
+}
+
+bool config_title_motion_enabled(const app_config_t *cfg,int app_id){
+    const char *p=cfg->motion_disabled_apps;
+    while(*p){char *end;long id=strtol(p,&end,10);if(end==p)break;
+        if(id==app_id && (*end==',' || !*end))return false;
+        if(*end!=',')break;p=end+1;
+    }
+    return true;
+}
+int config_toggle_title_motion(app_config_t *cfg,int app_id){
+    if(app_id<=0)return -1;
+    char result[sizeof(cfg->motion_disabled_apps)]={0};size_t used=0;
+    const char *p=cfg->motion_disabled_apps;int removed=0;
+    while(*p){char *end;long id=strtol(p,&end,10);if(end==p || (*end && *end!=','))return -1;
+        if(id==app_id)removed=1;
+        else if(id>0 && id<=2147483647L){int n=snprintf(result+used,sizeof(result)-used,"%s%ld",used?",":"",id);
+            if(n<0 || (size_t)n>=sizeof(result)-used)return -1;used+=(size_t)n;}
+        p=*end?end+1:end;
+    }
+    if(!removed){int n=snprintf(result+used,sizeof(result)-used,"%s%d",used?",":"",app_id);if(n<0 || (size_t)n>=sizeof(result)-used)return -1;}
+    memcpy(cfg->motion_disabled_apps,result,sizeof(result));return 0;
 }

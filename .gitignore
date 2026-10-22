@@ -81,3 +81,9 @@ junit*.xml
 *.profdata
 *.asan
 *.ubsan
+
+# Local Graphify index and extraction cache
+/graphify-out/
+
+# Local research, console transfers and release staging
+/work/

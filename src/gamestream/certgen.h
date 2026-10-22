@@ -27,3 +27,6 @@ void bytes_to_hex(const unsigned char *in, char *out, size_t len);
 void hex_to_bytes(const char *in, unsigned char *out, size_t *outlen);
 void uuid_v4(client_identity_t *id, char *out37);
 int rng_fill(client_identity_t *id, unsigned char *buf, size_t len);
+
+#include <pthread.h>
+extern pthread_mutex_t identity_crypto_mutex;

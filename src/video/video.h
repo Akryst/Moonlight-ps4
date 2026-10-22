@@ -50,6 +50,13 @@ void video_stats_add_decode(unsigned long long decode_us);
 void video_stats_add_bounce(unsigned long long bounce_us);
 /* Accumulate the AU staging copy and its size (not counted in decode). */
 void video_stats_add_au(unsigned long long au_us, unsigned long long au_bytes);
+/* per-decode network metrics from the DECODE_UNIT (fed by the
+ * decoders' submit callbacks): full_length = encoded frame bytes,
+ * recv_us = enqueueTimeUs - receiveTimeUs (frame spread over the wire),
+ * host_dms = frameHostProcessingLatency in 1/10 ms (0 = not reported).
+ * Powers the "Network" line of the perf overlay. */
+void video_stats_add_net(unsigned long long full_length, unsigned long long recv_us,
+                          unsigned long long host_dms);
 
 /* Rolling per-frame history for the on-screen perf overlay (see ui_menu
  * "Perf overlay"). Independent of video_reset_stats()/the periodic log in
@@ -63,6 +70,9 @@ typedef struct {
     float convert_ms;   /* avg convert (bounce+blit/bgra) time over the window */
     float present_ms;   /* avg SubmitFlip+wait time over the window */
     float kb_per_frame; /* avg AU (encoded) size over the window */
+    float net_recv_ms;  /* avg enqueue-receive spread per frame (ms) */
+    float host_ms;      /* host processing latency reported by Sunshine (ms) */
+    float rx_mbps;      /* measured encoded-video bitrate (Mbit/s) */
     float frame_ms[VIDEO_STATS_HISTORY]; /* delivery interval per frame, oldest..newest */
     int frame_count;                     /* valid entries in frame_ms */
 } video_live_stats_t;
@@ -86,6 +96,15 @@ int video_present_is_bgra(void);
  * drawn top-left on the streamed frame. Only supported in BGRA present mode
  * (prefer_ycbcr=false); ignored otherwise. */
 void video_set_show_stats(int enable);
+/* Flip the perf overlay live; returns the new state. Driven by the
+ * quick menu's overlay row (stream.c persists the choice to the config
+ * when the session ends). */
+int video_toggle_stats(void);
+int video_get_show_stats(void);
+/* Show the control-combo hint overlay for `seconds` starting at the next
+ * presented frame (quit combo + host Guide combo). Bottom-left, drawn on
+ * every frame until the deadline passes. BGRA present mode only. */
+void video_show_hint(int seconds);
 /* BGRA pipeline: kick convert async; finish = join + flip. Decode always separate. */
 int video_present_bgra_pipe_kick(const uint8_t *y, const uint8_t *uv,
                                  int pitch_y, int pitch_uv, int w, int h,

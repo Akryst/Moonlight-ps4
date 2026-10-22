@@ -13,7 +13,7 @@
 #define CERT_FILE "cert.pem"
 #define KEY_FILE "key.pem"
 
-const char *gs_error = "";
+
 
 void bytes_to_hex(const unsigned char *in, char *out, size_t len) {
     for (size_t i = 0; i < len; i++)
@@ -35,12 +35,15 @@ void hex_to_bytes(const char *in, unsigned char *out, size_t *outlen) {
 }
 
 int rng_fill(client_identity_t *id, unsigned char *buf, size_t len) {
-    return mbedtls_ctr_drbg_random(&id->rng, buf, len) == 0 ? GS_OK : GS_FAILED;
+    pthread_mutex_lock(&identity_crypto_mutex);
+    int rc=mbedtls_ctr_drbg_random(&id->rng, buf, len);
+    pthread_mutex_unlock(&identity_crypto_mutex);
+    return rc == 0 ? GS_OK : GS_FAILED;
 }
 
 void uuid_v4(client_identity_t *id, char *out37) {
     unsigned char b[16];
-    mbedtls_ctr_drbg_random(&id->rng, b, sizeof(b));
+    rng_fill(id,b,sizeof(b));
     b[6] = (b[6] & 0x0F) | 0x40;
     b[8] = (b[8] & 0x3F) | 0x80;
     snprintf(out37, 37,

@@ -21,6 +21,7 @@ fi
 if [[ ! -f "$HOME/ps4dev/ffmpeg-ps4/lib/libavcodec.a" ]]; then
     scripts/build_ffmpeg_ps4.sh
 fi
+bash preview/run_native_checks.sh
 if [[ -f tests/run_host_tests.sh ]]; then
     bash tests/run_host_tests.sh
 else

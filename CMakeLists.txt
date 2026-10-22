@@ -39,10 +39,13 @@ set(COMMON_SOURCES
 )
 
 set(GAMESTREAM_SOURCES
+    src/gamestream/mdns_legacy.c
     src/gamestream/discovery.c
     src/gamestream/certgen.c
     src/gamestream/gs_http.c
     src/gamestream/mini_xml.c
+    src/gamestream/gs_errors.c
+    src/gamestream/launch_flow.c
     src/gamestream/client.c
     src/gamestream/sps.c
 )
@@ -67,6 +70,27 @@ if(PS4)
             "Run: scripts/build_ffmpeg_ps4.sh")
     endif()
 
+    # Phase 1 only: standalone capture/handover probe and independent control viewer.
+    add_executable(moonlight-gpu-probe.elf EXCLUDE_FROM_ALL
+        src/experiments/gpu_probe.c
+        src/video/renderer_videoout.c src/video/nv12_blit.c src/video/video_stats.c
+        src/ui/ui_draw.c src/log.c
+    )
+    target_compile_definitions(moonlight-gpu-probe.elf PRIVATE ML_NO_STREAM_OVERLAYS=1)
+    target_include_directories(moonlight-gpu-probe.elf PRIVATE third_party/moonlight-common-c/src)
+    target_link_libraries(moonlight-gpu-probe.elf PRIVATE
+        ScePigletv2VSH SceSystemService SceSysmodule SceVideoOut SceGnmDriver SceUserService)
+    add_executable(moonlight-gpu-viewer.elf EXCLUDE_FROM_ALL
+        src/experiments/gpu_viewer.c
+        src/video/renderer_videoout.c src/video/nv12_blit.c src/video/video_stats.c
+        src/ui/ui_draw.c src/log.c
+    )
+    target_compile_definitions(moonlight-gpu-viewer.elf PRIVATE ML_NO_STREAM_OVERLAYS=1)
+    target_include_directories(moonlight-gpu-viewer.elf PRIVATE third_party/moonlight-common-c/src)
+    target_link_libraries(moonlight-gpu-viewer.elf PRIVATE
+        SceSystemService SceVideoOut SceGnmDriver SceUserService
+    )
+
     add_executable(moonlight-ps4.elf
         src/main.c
         src/stream.c
@@ -79,10 +103,12 @@ if(PS4)
         src/video/nv12_blit.c
         src/video/decoder_ffmpeg.c
         src/video/decoder_orbis.c
+        src/input/touch_gesture.c
         src/input/input_pad.c
         src/ui/ui_draw.c
         src/ui/ui_theme.c
         src/ui/ui_art.c
+        src/ui/quick_menu.c
         src/ui/ui_menu.c
         ${COMMON_SOURCES}
         ${GAMESTREAM_SOURCES}

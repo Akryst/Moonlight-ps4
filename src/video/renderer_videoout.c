@@ -3,12 +3,15 @@
 #include "nv12_blit.h"
 #include "present_policy.h"
 #include "../log.h"
+#include "../input/input_pad.h"
 #include "../orbis/video_out_c.h"
 #include "../ui/ui_draw.h"
+#include "../ui/quick_menu.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <pthread.h>
 #include <emmintrin.h> /* SSE2 — Jaguar PS4 */
 
@@ -30,6 +33,15 @@ static off_t s_dmem_off;
 static size_t s_dmem_size;
 static void *s_dmem_base;      /* Garlic map */
 static void *s_dmem_cpu_base;  /* Onion alias map (nullable) */
+/* a second mapping of the SAME pages with the
+ * allocation's own WC type. VideoOut registers (and DCE reads) these VAs
+ * - coherent for the display engine - and the menu's frame upload writes
+ * them directly, which skips the per-frame garlic flush. Any failure
+ * falls back to the cached alias everywhere. */
+static void *s_dmem_wc_base;
+static void *s_fb_wc[FB_COUNT_MAX];
+static int s_reg_wc;           /* 1: VideoOut holds the WC VAs */
+static int s_menu_alias_logged;
 static int s_width, s_height, s_pitch;
 static int s_buf_h; /* height registered in VideoOut (1080); decoder may be 1088 */
 static int s_use_bgra;
@@ -41,7 +53,7 @@ static int s_ycc_hrep4;  /* 1: expand ×4; 0: NV12 packed */
 static int s_gray_left;  /* gray test frames at start */
 static int s_last_flip_idx = -1;
 static int s_flip_wait_logs;
-static int s_show_stats;
+static atomic_int s_show_stats;
 
 /*
  * BGRA MT: workers claim row bands off an atomic counter, so a slow band does
@@ -231,7 +243,15 @@ int video_present_plugin_loaded(void) {
 }
 
 static void free_dmem(void) {
-    /* Single mapping (base); ReleaseDirectMemory is enough. */
+    /* WC alias needs an explicit unmap (01.46): present re-inits would
+     * otherwise leak a full-frame-size VA mapping each time. */
+    if (s_dmem_wc_base) {
+        sceKernelMunmap(s_dmem_wc_base, s_dmem_size);
+        s_dmem_wc_base = NULL;
+        memset(s_fb_wc, 0, sizeof(s_fb_wc));
+        s_reg_wc = 0;
+    }
+    /* Base mapping: ReleaseDirectMemory is enough. */
     if (s_dmem_base) {
         sceKernelReleaseDirectMemory(s_dmem_off, s_dmem_size);
         s_dmem_base = NULL;
@@ -325,6 +345,29 @@ static int alloc_dmem(size_t per_fb, int alloc_count, int reg_count, int force_w
         s_fb_cpu[i] = s_fb[i];
         memset(s_fb_cpu[i], 0x10, s_fb_size);
     }
+
+    /* with a cacheable blit alias in hand, also map
+     * the same pages write-combined for the register + menu path. This is
+     * what lets the menu skip the per-frame garlic flush, and DCE reads
+     * are coherent by construction. Failure is non-fatal: everything
+     * falls back to the cached alias. */
+    s_dmem_wc_base = NULL;
+    if (s_present_wb) {
+        void *wc = NULL;
+        int m2 = sceKernelMapDirectMemory2(&wc, s_dmem_size, ML_DMEM_TYPE_GARLIC,
+                                            ML_DMEM_PROT_RW, 0, s_dmem_off,
+                                            FB_ALIGN);
+        if (m2 == 0 && wc) {
+            s_dmem_wc_base = wc;
+            for (int i = 0; i < s_fb_alloc; i++)
+                s_fb_wc[i] = (uint8_t *)wc + (size_t)i * s_fb_size;
+            LOGI("present: dmem WC alias OK (register + menu path)");
+        } else {
+            LOGW("present: dmem WC alias => 0x%08x (menu via cached alias)",
+                 (unsigned)m2);
+        }
+    }
+
     if (s_present_wb) {
         __asm__ volatile("sfence" ::: "memory");
         sceGnmFlushGarlic();
@@ -355,10 +398,28 @@ static int register_bgra(int w, int h, uint32_t pitch) {
                                   ML_VIDEO_OUT_TILING_LINEAR,
                                   ML_VIDEO_OUT_ASPECT_16_9,
                                   (uint32_t)w, (uint32_t)h, pitch);
-    int rc = sceVideoOutRegisterBuffers(s_video, 0, (void *const *)s_fb, s_fb_count,
-                                        &attr);
-    LOGI("present: BGRA try pitch=%u %dx%d n=%d => 0x%08x",
-         pitch, w, h, s_fb_count, (unsigned)rc);
+    s_reg_wc = 0;
+    int rc;
+    if (s_dmem_wc_base) {
+        /* DCE reads the WC mapping coherently -
+         * frames uploaded through it need no garlic flush. */
+        rc = sceVideoOutRegisterBuffers(s_video, 0, (void *const *)s_fb_wc,
+                                        s_fb_count, &attr);
+        LOGI("present: BGRA try pitch=%u %dx%d n=%d => 0x%08x",
+             pitch, w, h, s_fb_count, (unsigned)rc);
+        if (rc == 0) {
+            s_reg_wc = 1;
+            return rc;
+        }
+        LOGW("present: BGRA register via WC VA failed; retry with cached VA");
+    }
+    rc = sceVideoOutRegisterBuffers(s_video, 0, (void *const *)s_fb, s_fb_count,
+                                    &attr);
+    if (s_dmem_wc_base)
+        LOGI("present: BGRA register cached-VA retry => 0x%08x", (unsigned)rc);
+    else
+        LOGI("present: BGRA try pitch=%u %dx%d n=%d => 0x%08x",
+             pitch, w, h, s_fb_count, (unsigned)rc);
     return rc;
 }
 
@@ -1113,6 +1174,7 @@ bgra_debug:
     s_last_flip_idx = -1;
     s_flip_logged = 0;
     s_flip_wait_logs = 0;
+    s_menu_alias_logged = 0;
     s_flip_mode = ML_VIDEO_OUT_FLIP_VSYNC;
     s_gray_left = 0;
     for (int i = 0; i < s_fb_count; i++) {
@@ -1175,7 +1237,21 @@ void video_set_show_stats(int enable) {
     s_show_stats = enable ? 1 : 0;
 }
 
-/* Colors 0xAARRGGBB (BGRA LE); the output plane ignores alpha (see ui_menu.c). */
+int video_toggle_stats(void) {
+    s_show_stats = !s_show_stats;
+    return s_show_stats;
+}
+
+int video_get_show_stats(void) {
+    return s_show_stats;
+}
+
+/* Colors 0xAARRGGBB (BGRA LE); the output plane ignores alpha (see ui_menu.c).
+ *
+ * The overlay used to be raw 8x8 bitmap text in a flat rectangle -
+ * functional, but it read as a debug screen. It follows the same visual
+ * language as the menu: translucent anti-aliased panels, Carlito labels,
+ * right-aligned values, and the AA glyph/shape work. */
 #define STATS_COL_BG      0xFF141B24u
 #define STATS_COL_ACCENT  0xFF3FA7FFu
 #define STATS_COL_TEXT    0xFFE8ECF0u
@@ -1184,53 +1260,283 @@ void video_set_show_stats(int enable) {
 #define STATS_COL_WARN    0xFFFFB03Fu
 #define STATS_COL_BAD     0xFFFF4D4Du
 #define STATS_COL_GRAPH_BG 0xFF0B0F14u
+/* Panel blend alphas: dark enough to read text on any game frame, light
+ * enough that the stream stays the star. */
+#define STATS_PANEL_ALPHA 200
+#define HINT_PILL_ALPHA  168
 
-/* Perf overlay: FPS/decode/convert/present/KB-per-frame + a frame-time
- * timeline (bar per recent frame; green/amber/red vs. 60/30 fps budgets).
- * Draws directly onto the BGRA backbuffer before it is flushed/flipped, so
- * it is redrawn fresh every frame (no need to erase it beforehand). */
+/* Transient combo hint at stream start: shows how to open the quick menu
+ * and send the host Guide button. Time-based, once per session (plus a
+ * few seconds); drawn as a bottom-center pill. The quit combo is
+ * gone (quit lives in the quick menu); two entries remain. */
+static atomic_ullong s_hint_deadline_us; /* 0 = not showing */
+
+void video_show_hint(int seconds) {
+    s_hint_deadline_us = seconds > 0 ? now_us() + (uint64_t)seconds * 1000000ull : 0;
+}
+
+/* One hint entry = "KEYS  action"; rendered in a single centered pill. */
+static void draw_hint_overlay(uint8_t *dst) {
+    uint64_t deadline=atomic_load(&s_hint_deadline_us);
+    if (!deadline)
+        return;
+    uint64_t now = now_us();
+    if (now > deadline) {
+        s_hint_deadline_us = 0;
+        return;
+    }
+    ui_surface_t s = { dst, s_pitch, s_width, s_buf_h };
+
+    /* Fade in the last half second before disappearing. */
+    int alpha = HINT_PILL_ALPHA;
+    uint64_t left = deadline - now;
+    if (left < 400000ull)
+        alpha = (int)(HINT_PILL_ALPHA * left / 400000ull);
+
+    const char *keys[2] = { "L1 + R1 + OPTIONS", "L3 + R3 (hold)" };
+    const char *acts[2] = { "Guide (PS)", "stream menu" };
+    const int size_k = 21, size_a = 21;
+    int widths[2], total_w = 0;
+    for (int i = 0; i < 2; i++) {
+        widths[i] = ui_label_w(size_k, 1, keys[i]) + 14 +
+                    ui_label_w(size_a, 0, acts[i]);
+        total_w += widths[i] + (i ? 26 : 0);
+    }
+    int ph = 62, py = s_buf_h - ph - 26;
+    int px = (s_width - total_w) / 2;
+    ui_round_rect_alpha(&s, px - 30, py, total_w + 60, ph, ph / 2,
+                        STATS_COL_BG, alpha);
+
+    int x = px;
+    for (int i = 0; i < 2; i++) {
+        ui_label(&s, x, py + (ph - 30) / 2, size_k, 1, STATS_COL_TEXT, keys[i]);
+        x += ui_label_w(size_k, 1, keys[i]) + 14;
+        ui_label(&s, x, py + (ph - 30) / 2, size_a, 0, STATS_COL_DIM, acts[i]);
+        x += ui_label_w(size_a, 0, acts[i]) + 26;
+        if (i < 1) {
+            /* Middle-dot separator. */
+            ui_label(&s, x - 18, py + (ph - 30) / 2, 21, 0,
+                     0xFF55606E, "\xc2\xb7");
+        }
+    }
+}
+
+/* progress ring while the L3+R3 quick-menu hold runs (~2.5 s).
+ * The ring is the affordance that makes the hold feel intentional
+ * instead of dead. (The old red quit ring is gone with the quit combo.) */
+#ifndef ML_NO_STREAM_OVERLAYS
+static void draw_hold_overlay(uint8_t *dst) {
+    int prog = input_stats_hold_progress();
+    if (!prog)
+        return;
+    ui_surface_t s = { dst, s_pitch, s_width, s_buf_h };
+
+    uint32_t accent = STATS_COL_ACCENT;
+    const char *label = "stream menu";
+
+    int cx = s_width / 2, cy = s_buf_h - 190;
+    int radius = 40, thick = 6;
+    /* Track ring + progress arc. */
+    ui_ring_arc(&s, cx, cy, radius, thick, 0xFF303A46, 0, 1000);
+    ui_ring_arc(&s, cx, cy, radius, thick, accent, 0, prog);
+    /* Center glyph: a PS 'cross' icon (the confirm shape) tinted to match. */
+    ui_icon(&s, cx - 12, cy - 12, 24, 7, accent);
+    int lw = ui_label_w(22, 0, label);
+    ui_label(&s, cx - lw / 2, cy + radius + 16, 22, 0, STATS_COL_TEXT, label);
+}
+
+/* in-stream quick menu (hold L3+R3). Same visual language as the
+ * perf overlay: translucent panel, Carlito rows, right-aligned values,
+ * accent selection bar. State lives in quick_menu.c (stream thread);
+ * this is a pure per-frame view. BGRA present mode only - the menu is
+ * gated on that in stream.c (YCbCr pass-through cannot draw overlays).
+ */
+static void draw_quick_menu(uint8_t *dst) {
+    qm_view_t m;
+    qm_view(&m);
+    if (!m.open)
+        return;
+    ui_surface_t s = { dst, s_pitch, s_width, s_buf_h };
+
+    static const char *k_labels[QM_ROW_COUNT] = {
+        "Touchpad mouse", "Performance overlay", "Bitrate (kbps)",
+        "Quit stream", "Quit app on PC",
+    };
+
+    const int pw = 620, row_h = 64, pad = 28;
+    const int title_h = 66, foot_h = 44;
+    const int ph = pad + title_h + 10 + row_h * QM_ROW_COUNT + 8 + foot_h + pad;
+    const int px = (s_width - pw) / 2;
+    const int py = (s_buf_h - ph) / 2;
+    ui_round_rect_alpha(&s, px, py, pw, ph, 18, STATS_COL_BG, 236);
+
+    /* Title + accent underline. */
+    ui_label(&s, px + pad, py + pad - 6, 27, 1, STATS_COL_TEXT, "STREAM MENU");
+    ui_rect(&s, px + pad, py + pad + 34, pw - pad * 2, 3, STATS_COL_ACCENT);
+
+    int y = py + pad + title_h + 10;
+    for (int i = 0; i < QM_ROW_COUNT; i++, y += row_h) {
+        int selected = (i == m.sel);
+        if (selected) {
+            ui_round_rect_alpha(&s, px + 14, y - 4, pw - 28, row_h - 4, 10,
+                                0xFF25303C, 236);
+            ui_rect(&s, px + 14, y - 4, 4, row_h - 4, STATS_COL_ACCENT);
+        }
+        uint32_t col = selected ? STATS_COL_TEXT : STATS_COL_DIM;
+        ui_label(&s, px + pad + 8, y + 12, 24, selected ? 1 : 0, col,
+                 k_labels[i]);
+
+        char val[24];
+        const char *vstr = NULL;
+        switch (i) {
+        case QM_ROW_TOUCHPAD:
+            vstr = m.touchpad ? "On" : "Off";
+            break;
+        case QM_ROW_OVERLAY:
+            vstr = m.overlay ? "On" : "Off";
+            break;
+        case QM_ROW_BITRATE:
+            snprintf(val, sizeof(val), "%d  <  >", m.bitrate);
+            vstr = val;
+            break;
+        default:
+            break; /* quit rows: action only, no value */
+        }
+        if (vstr)
+            ui_label(&s, px + pw - pad - 8 - ui_label_w(24, 0, vstr), y + 12,
+                     24, 0, selected ? STATS_COL_ACCENT : STATS_COL_TEXT,
+                     vstr);
+    }
+
+    /* Footer: the two verbs + the one side effect worth warning about. */
+    const char *foot = "X select   \xc2\xb7   CIRCLE close   \xc2\xb7   "
+                       "bitrate change reconnects";
+    ui_label(&s, px + (pw - ui_label_w(20, 0, foot)) / 2,
+             py + ph - pad - 22, 20, 0, STATS_COL_DIM, foot);
+}
+
+/* Perf overlay (quick menu, default off): a translucent Carlito panel with the
+ * measured pipeline times, the network line (frame wire spread + the
+ * host-processing latency Sunshine reports + the measured RX bitrate) and
+ * the frame-time bars. Redrawn fresh on every presented frame. */
+#else
+static void draw_hold_overlay(uint8_t *dst){(void)dst;}
+static void draw_quick_menu(uint8_t *dst){(void)dst;}
+#endif
+
 static void draw_stats_overlay(uint8_t *dst) {
     video_live_stats_t live;
     video_stats_get_live(&live);
 
     ui_surface_t s = { dst, s_pitch, s_width, s_buf_h };
 
-    const int scale = 2;
-    const int line_h = 8 * scale + 6;
-    const int graph_w = 240, graph_h = 56;
-    const int px = 24, py = 24;
-    const int pad = 12;
-    const int pw = graph_w + pad * 2;
-    const int ph = pad + line_h * 4 + 8 + graph_h + pad;
+    const int px = 28, py = 28, pw = 396;
+    const int pad = 24;
+    const int graph_w = pw - pad * 2, graph_h = 44;
+    /* Row budget: header + divider + 5 value rows + graph. */
+    const int header_h = 86;
+    const int row_h = 44;
+    const int ph = pad + header_h + 8 + row_h * 5 + 14 + graph_h + pad;
+    ui_round_rect_alpha(&s, px, py, pw, ph, 16, STATS_COL_BG,
+                        STATS_PANEL_ALPHA);
+    /* Accent edge: a 3px top band inside the rounded corner - matches the
+     * menu's panels without a hard rectangle. */
+    ui_round_rect_alpha(&s, px + 14, py + 10, 44, 3, 1, STATS_COL_ACCENT,
+                        STATS_PANEL_ALPHA);
+    ui_label(&s, px + 68, py + 6, 20, 1, STATS_COL_DIM, "PERFORMANCE");
 
-    ui_rect(&s, px, py, pw, ph, STATS_COL_BG);
-    ui_rect(&s, px, py, pw, 3, STATS_COL_ACCENT);
+    /* Header: big FPS reading + stream shape. */
+    char v[96];
+    snprintf(v, sizeof(v), "%.1f", (double)live.fps);
+    ui_label(&s, px + pad, py + 44, 46, 1, STATS_COL_TEXT, v);
+    int vw = ui_label_w(46, 1, v);
+    ui_label(&s, px + pad + vw + 10, py + 66, 22, 0, STATS_COL_DIM, "fps");
 
-    char line[64];
-    int ty = py + pad;
-    int tx = px + pad;
+    /* Dropped-frame indicator colored by health (60 fps budget).
+     * right-align BOTH header values like the rows below -
+     * left-anchoring them at the panel's inner right edge made the
+     * resolution and the KB/frame strings spill out of the box. */
+    snprintf(v, sizeof(v), "%dx%d", s_width, s_buf_h);
+    int hw = ui_label_w(21, 0, v);
+    ui_label(&s, px + pw - pad - hw, py + 14, 21, 0, STATS_COL_DIM, v);
+    snprintf(v, sizeof(v), "%.0f KB/frame", (double)live.kb_per_frame);
+    hw = ui_label_w(21, 0, v);
+    ui_label(&s, px + pw - pad - hw, py + 58, 21, 0, STATS_COL_DIM, v);
 
-    snprintf(line, sizeof(line), "FPS %.1f", (double)live.fps);
-    ui_text_bitmap(&s, tx, ty, scale, STATS_COL_GOOD, line);
-    ty += line_h;
+    /* Divider. */
+    ui_overlay(&s, px + pad, py + header_h + 6, pw - pad * 2, 2,
+               0xFF2A3542, 255);
 
-    snprintf(line, sizeof(line), "DEC %.1fms  CONV %.1fms",
-             (double)live.decode_ms, (double)live.convert_ms);
-    ui_text_bitmap(&s, tx, ty, scale, STATS_COL_TEXT, line);
-    ty += line_h;
+    /* Value rows: label left (dim), value right-aligned (white). */
+    int ty = py + header_h + 18;
+    const int vl = 21, vv = 22;
+    struct { const char *name; char value[64]; uint32_t col; } rows[4];
+    int nrows = 0;
 
-    snprintf(line, sizeof(line), "PRES %.1fms  WORK %.1fms", (double)live.present_ms,
-             (double)(live.decode_ms + live.convert_ms + live.present_ms));
-    ui_text_bitmap(&s, tx, ty, scale, STATS_COL_TEXT, line);
-    ty += line_h;
+    snprintf(rows[nrows].value, sizeof(rows[nrows].value),
+             "%.1f + %.1f ms", (double)live.decode_ms, (double)live.convert_ms);
+    rows[nrows].name = "Decode + convert";
+    rows[nrows].col = STATS_COL_TEXT;
+    nrows++;
 
-    snprintf(line, sizeof(line), "%.0f KB/frame", (double)live.kb_per_frame);
-    ui_text_bitmap(&s, tx, ty, scale, STATS_COL_DIM, line);
-    ty += line_h + 8;
+    snprintf(rows[nrows].value, sizeof(rows[nrows].value),
+             "%.1f ms", (double)live.present_ms);
+    rows[nrows].name = "Present";
+    rows[nrows].col = STATS_COL_TEXT;
+    nrows++;
+
+    /* Network line: wire spread + host-side processing latency (when the
+     * host reports it) + the measured encoded-video bitrate. */
+    if (live.host_ms > 0.0f) {
+        snprintf(rows[nrows].value, sizeof(rows[nrows].value),
+                 "recv %.1f ms  host %.1f ms",
+                 (double)live.net_recv_ms, (double)live.host_ms);
+    } else {
+        snprintf(rows[nrows].value, sizeof(rows[nrows].value),
+                 "recv %.1f ms", (double)live.net_recv_ms);
+    }
+    rows[nrows].name = "Network";
+    rows[nrows].col = STATS_COL_ACCENT;
+    nrows++;
+
+    snprintf(rows[nrows].value, sizeof(rows[nrows].value),
+             "%.1f Mbps", (double)live.rx_mbps);
+    rows[nrows].name = "Video bitrate";
+    rows[nrows].col = STATS_COL_TEXT;
+    nrows++;
+
+    /* Health row: color by how the feed is keeping up with 60 fps. */
+    float work = live.decode_ms + live.convert_ms + live.present_ms;
+    const char *health_txt;
+    uint32_t health_col;
+    if (live.fps >= 55.0f) {
+        health_txt = "smooth";
+        health_col = STATS_COL_GOOD;
+    } else if (live.fps >= 30.0f) {
+        health_txt = "keeping up";
+        health_col = STATS_COL_WARN;
+    } else {
+        health_txt = "behind";
+        health_col = STATS_COL_BAD;
+    }
+    (void)work;
+    snprintf(rows[nrows].value, sizeof(rows[nrows].value), "%s", health_txt);
+    rows[nrows].name = "Feed";
+    rows[nrows].col = health_col;
+    nrows++;
+
+    for (int i = 0; i < nrows; i++) {
+        int y = ty + i * row_h;
+        ui_label(&s, px + pad, y, vl, 0, STATS_COL_DIM, rows[i].name);
+        int wv = ui_label_w(vv, 1, rows[i].value);
+        ui_label(&s, px + pw - pad - wv, y - 2, vv, 1, rows[i].col,
+                 rows[i].value);
+    }
 
     /* Frame-time timeline: oldest on the left, most recent on the right. */
-    int gx = tx, gy = ty;
-    ui_rect(&s, gx, gy, graph_w, graph_h, STATS_COL_GRAPH_BG);
+    int gx = px + pad, gy = ty + nrows * row_h + 6;
+    ui_round_rect_alpha(&s, gx, gy, graph_w, graph_h, 8, STATS_COL_GRAPH_BG,
+                        STATS_PANEL_ALPHA);
 
     float max_ms = 16.7f; /* floor at 60fps so a perfectly smooth feed still shows some bar */
     for (int i = 0; i < live.frame_count; i++)
@@ -1241,25 +1547,30 @@ static void draw_stats_overlay(uint8_t *dst) {
     int nbars = graph_w / (bar_w + gap);
     if (nbars > live.frame_count)
         nbars = live.frame_count;
-    int x0 = gx + graph_w - nbars * (bar_w + gap);
+    int x0 = gx + graph_w - nbars * (bar_w + gap) - 1;
     for (int i = 0; i < nbars; i++) {
         int src_idx = live.frame_count - nbars + i;
         float ms = live.frame_ms[src_idx];
-        int h = (int)(ms / max_ms * graph_h + 0.5f);
-        if (h > graph_h) h = graph_h;
+        int h = (int)(ms / max_ms * (graph_h - 6) + 0.5f);
+        if (h > graph_h - 6) h = graph_h - 6;
         if (h < 1) h = 1;
         uint32_t col = STATS_COL_GOOD;
         if (ms > 33.3f)
             col = STATS_COL_BAD; /* below 30fps budget */
         else if (ms > 16.7f)
             col = STATS_COL_WARN; /* below 60fps budget */
-        ui_rect(&s, x0 + i * (bar_w + gap), gy + graph_h - h, bar_w, h, col);
+        ui_rect(&s, x0 + i * (bar_w + gap), gy + graph_h - 3 - h, bar_w, h, col);
     }
 }
 
 static void present_submit_flip(int next, uint8_t *dst, uint64_t convert_us) {
     if (s_show_stats && s_use_bgra)
         draw_stats_overlay(dst);
+    if (s_use_bgra) {
+        draw_hold_overlay(dst); /* quick-menu hold progress ring */
+        draw_hint_overlay(dst);
+        draw_quick_menu(dst); /* on top of everything else */
+    }
 
     __asm__ volatile("sfence" ::: "memory");
     sceGnmFlushGarlic();
@@ -1554,6 +1865,22 @@ int video_ui_flip(int idx) {
     return rc;
 }
 
+/* Flip a frame whose bytes were written through the WC alias: write-
+ * combined stores land in memory in order and DCE reads them coherently,
+ * so the sfence + garlic flush of the cached path is skipped. */
+static int video_ui_flip_wc(int idx) {
+    if (s_video < 0 || idx < 0 || idx >= s_fb_count)
+        return -1;
+    int32_t rc = sceVideoOutSubmitFlip(s_video, idx, 2u, 0);
+    if (rc != 0)
+        rc = sceVideoOutSubmitFlip(s_video, idx, (uint32_t)s_flip_mode, 0);
+    if (rc == 0) {
+        s_fb_index = idx;
+        s_last_flip_idx = idx;
+    }
+    return rc;
+}
+
 /*
  * Present a full BGRA frame from staging (pitch in bytes).
  * Atomic copy to backbuffer → flip. Preferred for the menu.
@@ -1576,7 +1903,12 @@ int video_ui_present(const uint8_t *src, int src_pitch) {
     if (next < 0)
         return -1;
 
-    uint8_t *dst = (uint8_t *)s_fb_cpu[next];
+    int via_wc = s_dmem_wc_base && s_reg_wc;
+    if (via_wc && !s_menu_alias_logged) {
+        s_menu_alias_logged = 1;
+        LOGI("video_ui: menu frames via WC (DCE-coherent) alias");
+    }
+    uint8_t *dst = via_wc ? (uint8_t *)s_fb_wc[next] : (uint8_t *)s_fb_cpu[next];
     int rows = s_buf_h;
     size_t row_bytes = (size_t)s_width * 4u;
     if (src_pitch == s_pitch && (size_t)src_pitch == row_bytes) {
@@ -1587,7 +1919,10 @@ int video_ui_present(const uint8_t *src, int src_pitch) {
                    src + (size_t)r * (size_t)src_pitch, row_bytes);
         }
     }
-    return video_ui_flip(next);
+    if (!via_wc)
+        return video_ui_flip(next);
+    __asm__ volatile("sfence" ::: "memory"); /* order the WC stores */
+    return video_ui_flip_wc(next);
 }
 
 void video_ui_end(void) {

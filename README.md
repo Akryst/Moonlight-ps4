@@ -2,145 +2,155 @@
 
 # Moonlight PS4
 
-### Release 01.35 · Experimental
+### 1.4.0
 
-Stream your PC games to a jailbroken PS4 with Sunshine and a DualShock 4.
+Your PC games, on your PS4. Built around a DualShock 4 and Sunshine.
 
-![Version](https://img.shields.io/badge/release-01.35-36CADB?style=flat-square&labelColor=172B40)
-![Platform](https://img.shields.io/badge/tested-PS4%20%2F%209.00%20%2F%20GoldHEN-0B1525?style=flat-square&labelColor=172B40)
-![Target](https://img.shields.io/badge/target-1080p60-36CADB?style=flat-square&labelColor=172B40)
+![Version](https://img.shields.io/badge/release-1.4.0-36CADB?style=flat-square&labelColor=172B40)
+![Platform](https://img.shields.io/badge/PS4-9.00%20%2F%20GoldHEN-0B1525?style=flat-square&labelColor=172B40)
 
-<img src="design/console/midnight-games-ps4-01.33.jpg" alt="Moonlight PS4 01.33 Games menu — actual PS4 screenshot" width="800">
+**[Download PKG](https://github.com/Akryst/Moonlight-ps4/releases/download/v1.4.0/Moonlight-PS4-01.40.pkg)** · **[Release notes and checksums](https://github.com/Akryst/Moonlight-ps4/releases/tag/v1.4.0)**
 
-<sub>Captured on an original PS4 running firmware 9.00 with GoldHEN · Midnight theme · Client 01.33.</sub>
+<img src="design/console/library-ps4-1.4.0.jpg" alt="Actual PS4 capture of the portrait library with Buckshot Roulette selected" width="960">
 
-**[What's new](#whats-new-in-0135)** · **[Install](#installation)** · **[Controls](#controls)** · **[Known issues](#known-issues)**
-
-**[Download PKG](https://github.com/Akryst/Moonlight-ps4/releases/download/v1.3.5/Moonlight-PS4-01.35-test.pkg)** · **[Release notes & checksums](https://github.com/Akryst/Moonlight-ps4/releases/tag/v1.3.5)**
+<sub>Actual PS4 capture from the build leading into 1.4.0. Game artwork belongs to its respective owners.</sub>
 
 </div>
 
-> **Unofficial client:** Moonlight PS4 is independently developed. It is not
-> affiliated with, endorsed by, or maintained by the official Moonlight project.
-> Product names belong to their respective owners.
+I wanted this to feel like an app you'd actually open on a console. Pick your PC,
+find a game, play. So the library got a proper redesign, the settings finally have
+some breathing room, and the controller prompts are actual images.
 
-## What's new in 01.35
+**1.4.0** brings the interface work and the controller/network updates together.
+There's still work to do, but this is a much nicer place to play from.
 
-- Steam synchronization runs once when Moonlight opens on PS4 and connects to the PC, before loading Games.
-- Removes the companion's five-minute synchronization schedule and synchronization at Windows sign-in.
-- A windowless Windows listener waits for the PS4 opening request; returning from a stream or refreshing Games does not trigger another scan.
-- Uses the existing Sunshine pairing certificate of an enabled device named **PS4** to authenticate the request.
-- Required Sunshine service reloads run without a PowerShell window and remain deferred while a stream is active.
-- Retains the 01.34 presentation policy, five themes and Rec.709 color correction.
+## what's new
 
-**Upgrade both parts:** install the 01.35 PKG and rerun the updated Windows
-companion installer as administrator. An older client does not send the opening
-request. See [Steam setup](docs/STEAM.md).
+The library has portrait covers, game backgrounds, smoother focus movement and
+a splash transition when you open the app. Covers and the game list are cached
+on disk. Refreshing them happens in the background, so the menu stays usable.
+Five themes are included: Midnight, Mono, Blue Wave, Daylight and Cinema.
+Reduced motion is available in Settings.
 
-Compilation, host checks and companion authentication checks pass. The opening
-request still needs end-to-end validation on PS4; no streaming performance gain
-is claimed.
+Up to **four logged-in DualShock 4s** get their own controller slots and player
+colors. Rumble reaches the motors, and host lightbar changes go back to the
+matching physical pad. Input uses a 4 ms polling interval, targeting 250 Hz.
+The L1 + R1 + Options shortcut keeps its short Guide pulse, including when you
+hold the buttons down.
 
-## Included features
+The touchpad can work as a mouse: move, drag, click, two-finger right click and
+high-resolution scrolling. Games can request gyro and accelerometer reports.
+You can turn motion off globally or just for the game selected in Library.
+Deadzone and Cross/Circle swap settings are still there too.
 
-- Local IPv4 mDNS discovery, manual IP entry and PIN pairing.
-- Sunshine application list, launch/resume and Desktop streaming.
-- H.264 hardware decoding, stereo Opus audio and DualShock 4 input.
-- Five saved themes: **Midnight · Mono · Blue Wave · Daylight · Cinema**.
-- Matching startup splashes, portrait covers and game panoramas.
-- Optional Windows Steam-library companion.
-- Balanced / Low latency modes, performance overlay and file logging.
-- Return to the client menu and a controller shortcut for the host Guide button.
+Starting a game now shows its name, the current launch step and elapsed time.
+Circle cancels. If a session gets stuck, the launch flow can clean it up and retry.
+Errors show the PC's answer, with X to retry and Triangle to refresh the app list.
+A dropped stream gets automatic resume attempts instead of immediately dumping
+you back into the library.
 
-<details>
-<summary><strong>Preview the five themes</strong></summary>
+**5.1 audio** is optional under Settings -> Audio. It uses the PS4's 8-channel
+HDMI output and falls back to a stereo downmix if that port can't be opened.
+Stereo stays the default. Settings -> Exit -> Exit Moonlight gives the app a
+title-side exit to the dashboard. The development-version startup toast is gone.
 
-![Splash with the Moonlight logo — native renderer preview](design/native-01.33/midnight-splash.png)
+And yeah, **Playnite** is included if it's installed on your PC. The optional
+Windows companion handles it alongside Steam. Synchronization runs once when
+Moonlight opens and connects. Returning from a game or refreshing the library
+doesn't start another scan. The old five-minute PowerShell interruptions stay gone.
 
-![Themes, splash screens and settings](design/native-themes-preview-01.33.png)
+## settings, finally
 
-</details>
+<img src="design/console/settings-ps4-1.4.0.jpg" alt="Actual PS4 capture of the grouped settings screen" width="960">
 
-<sub>Images are previews produced by the actual C UI renderer on a development
-PC, not PS4 captures. The previews show the 01.33 UI; the header image above is
-an actual PS4 screenshot. Game artwork belongs to its respective owners.</sub>
+Connection, Video, Audio, Controller, Advanced and Exit have their own sections.
+Changes save automatically. This is another capture from the PS4, not a desktop
+mockup. Both screenshots were taken on the 01.36 test build before the release
+version and startup notification were changed.
 
-## Installation
+## install
 
-**Tested setup:** original PS4, firmware **9.00**, GoldHEN, DualShock 4 and an
-Ethernet-connected PC running [Sunshine](https://github.com/LizardByte/Sunshine).
-The Windows test host uses ViGEmBus for controller emulation.
+The tested console setup is an original PS4 on **firmware 9.00 with GoldHEN**,
+a DualShock 4 and a wired PC running [Sunshine](https://github.com/LizardByte/Sunshine).
+Other console and firmware combinations haven't been verified.
 
-- **Package:** `Moonlight-PS4-01.35-test.pkg`
-- **Title ID:** `MLNT00001`
-- **Settings:** `/data/moonlight`
+1. Download `Moonlight-PS4-01.40.pkg` and `SHA256SUMS` from the
+   [1.4.0 release](https://github.com/Akryst/Moonlight-ps4/releases/tag/v1.4.0).
+2. Install the PKG through GoldHEN's Package Installer. The title ID is still
+   `MLNT00001`, so it updates the existing app and keeps `/data/moonlight`.
+3. Open **Computers** and connect to your PC. Use Triangle to search or enter
+   the PC's IPv4 address in Settings if discovery doesn't find it.
+4. Enter the displayed PIN in Sunshine, then open **Library** and pick a game.
 
-Download the PKG and `SHA256SUMS` from the
-[01.35 experimental release](https://github.com/Akryst/Moonlight-ps4/releases/tag/v1.3.5).
-The release also includes the optional Windows Steam companion. Build from
-source using [docs/BUILD.md](docs/BUILD.md).
+A good starting point is **1080p, 60 FPS, 20,000 kbps, hardware decoding and
+Balanced mode**. Use Desktop for external launchers such as TruckersMP.
 
-1. Install the PKG with GoldHEN's Package Installer. It updates an existing
-   client using the same title ID and retains its saved settings.
-2. Open **PCs** and press **Triangle** to discover your PC, or enter its IP in Settings.
-3. Connect with **X**, then enter the displayed PIN in Sunshine's pairing page.
-4. Select a game in **Games** and press **X** to play.
+For Steam library synchronization and installed Playnite detection, grab
+`Moonlight-PS4-Steam-Companion-01.40.zip` from the same release and follow
+[the companion setup](docs/STEAM.md). Existing companion installations need the
+updated scripts for Playnite support. Sunshine streaming also works without it.
 
-Start with **1080p · 60 FPS · 20,000 kbps · Hardware decoding · Balanced**.
-For TruckersMP or another external launcher, choose **Desktop** and launch the
-game on your PC. To publish installed Steam games automatically, follow
-[Steam setup](docs/STEAM.md).
-
-## Controls
+## controls
 
 | Input | Action |
 | --- | --- |
 | D-pad | Navigate |
 | X / Circle | Confirm / back |
-| Triangle | Discover PCs / refresh applications |
-| L1 / R1 | Switch menu tabs |
-| Options in Games | Close the active host session |
-| L1 + R1 + Options while streaming | Send Guide to the host |
-| Hold Options + Touchpad for about one second | Return to the client menu |
+| L1 / R1 | Switch tabs |
+| Triangle | Search for PCs / refresh games |
+| Square in Library | Select the running game for resume |
+| Options in Library | Ask to close the active host session |
+| L1 + R1 + Options while streaming | Send a short Guide pulse to the PC |
+| Hold L3 + R3 for 2.5 seconds | Open the stream menu in BGRA mode |
+| Circle during launch | Cancel the launch |
+| X / Triangle after a launch error | Retry / refresh the app list |
 
-The physical PS button opens the PS4 system menu. Use the Guide shortcut for Steam.
+The physical PS button belongs to the console menu. Use the Guide shortcut for
+Steam Big Picture. The stream menu has touchpad, performance overlay, bitrate
+and quit controls. Inputs return to neutral before going back to the game.
 
-## Known issues
+## what still needs testing
 
-- **Locked 60 FPS is not guaranteed.** An earlier ETS2 Desktop-stream sample
-  averaged 58.5 client-reported FPS over about 8.5 minutes, with the final
-  minutes near 59.9 FPS. Sunshine captured at 59.94 Hz.
-- A 01.33 Stellar Blade sample averaged 59.0 client-reported FPS over 217 seconds,
-  with 33 local buffer-starvation drops. This is the baseline for testing the 01.34 presentation policy,
-  not a measurement of the new release's performance.
-- The presentation changes introduced in 01.34 need console comparison.
-  The reported sharpening appearance has not been conclusively diagnosed.
-- Compatibility beyond the original PS4 / firmware 9.00 setup is unverified.
-- Discovery currently covers local IPv4; use manual IP if multicast is unavailable.
-- Keyboard/mouse support and native YCbCr presentation remain unfinished.
-- Steam auto-discovery requires the Windows companion. The PS4 reads Sunshine's
-  catalog rather than scanning Steam directly.
+This is still an **experimental homebrew client**. The UI has been captured on
+real hardware, and the package build and automated checks pass. That doesn't
+turn every new feature into a hardware-tested one.
 
-Detailed measurements and the next test procedure:
-[Stellar Blade presentation test](docs/PRESENTATION_01_34.md) and
-[ETS2 performance analysis](docs/ETS2_01_32.md).
-Experimental YCbCr plugins are outside the standard installation.
+Four physical pads together, gyro calibration, HDMI surround channel routing,
+network-drop recovery and both exit paths still need broader console testing.
+The fault handlers record a marker and exit; they don't repair the underlying
+fault or guarantee that closing through the system menu avoids a crash dialog.
 
-## Reporting a problem
+Locked 60 FPS isn't guaranteed. Older measurements are in
+[the presentation notes](docs/PRESENTATION_01_34.md) and
+[the ETS2 analysis](docs/ETS2_01_32.md); they're not benchmarks for 1.4.0.
+Native YCbCr presentation remains experimental and doesn't support the stream
+menu overlay. Use the normal BGRA path for that menu.
 
-Include client version, PS4 model/firmware, Sunshine version, network connection,
-resolution, bitrate and reproduction steps. For stutters, enable **Performance
-overlay** and **File logging**, and report timings and drops from the same scene.
-Remove personal information from logs; do not share pairing keys or certificates.
+## building and reporting issues
 
-## Credits
+Build instructions are in [docs/BUILD.md](docs/BUILD.md). The imported changes,
+adaptations and validation details are in [the integration notes](docs/FORK_INTEGRATION.md).
 
-Based on [JaimeJimenezG/Moonlight-ps4](https://github.com/JaimeJimenezG/Moonlight-ps4),
-using [moonlight-common-c](https://github.com/moonlight-stream/moonlight-common-c),
+For a bug report, include your client version, PS4 model/firmware, Sunshine
+version, connection type, resolution, bitrate and the steps that trigger it.
+Performance overlay and file logging help with stutters. Remove personal data
+from logs and keep pairing keys and certificates private.
+
+## credits
+
+Maintained by [Akryst](https://github.com/Akryst).
+
+Based on [JaimeJimenezG/Moonlight-ps4](https://github.com/JaimeJimenezG/Moonlight-ps4).
+Controller, recovery, HTTP, audio and presentation work was adapted from
+[raferrazz/Moonlight-ps4](https://github.com/raferrazz/Moonlight-ps4).
+
+Built with [moonlight-common-c](https://github.com/moonlight-stream/moonlight-common-c),
 [OpenOrbis](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain), Sunshine,
 FFmpeg, Opus and mbedTLS. Dependency pins: [third_party/DEPS](third_party/DEPS).
 Font notices: [vendor/FONT-LICENSE.txt](vendor/FONT-LICENSE.txt).
-UI asset provenance: [design/ASSETS_01_31.md](design/ASSETS_01_31.md).
+UI asset notes: [design/ASSETS_01_31.md](design/ASSETS_01_31.md) and
+[controller prompts](preview/assets/README.md).
 
-A consolidated top-level license notice remains pending. Existing dependency
-licenses and notices apply.
+This is an unofficial client, independent of the official Moonlight project.
+Existing upstream licenses and notices apply. Product names and game artwork
+belong to their respective owners.

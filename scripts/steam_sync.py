@@ -22,6 +22,62 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 MARKER = "moonlight-ps4-steam-id"
+LAUNCHER_MARKER = "moonlight-ps4-launcher"
+
+
+def find_playnite(explicit=None):
+    """Find the fullscreen executable without starting Playnite or reading its library."""
+    candidates = [Path(explicit)] if explicit else []
+    for variable in ("LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"):
+        if os.environ.get(variable):
+            candidates.append(Path(os.environ[variable]) / "Playnite/Playnite.FullscreenApp.exe")
+    if os.name == "nt" and not explicit:
+        import winreg
+        # The companion runs as SYSTEM, so its LOCALAPPDATA is not the player's.
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList") as profiles:
+                for index in range(winreg.QueryInfoKey(profiles)[0]):
+                    with winreg.OpenKey(profiles, winreg.EnumKey(profiles, index)) as profile:
+                        folder = os.path.expandvars(winreg.QueryValueEx(profile, "ProfileImagePath")[0])
+                        candidates.append(Path(folder) / "AppData/Local/Playnite/Playnite.FullscreenApp.exe")
+        except OSError:
+            pass
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for prefix in (r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"):
+                try:
+                    with winreg.OpenKey(hive, prefix) as installed:
+                        for index in range(winreg.QueryInfoKey(installed)[0]):
+                            try:
+                                with winreg.OpenKey(installed, winreg.EnumKey(installed, index)) as entry:
+                                    if "playnite" in str(winreg.QueryValueEx(entry, "DisplayName")[0]).casefold():
+                                        candidates.append(Path(winreg.QueryValueEx(entry, "InstallLocation")[0]) / "Playnite.FullscreenApp.exe")
+                            except OSError:
+                                pass
+                except OSError:
+                    pass
+    for candidate in candidates:
+        if candidate.is_dir():
+            candidate /= "Playnite.FullscreenApp.exe"
+        if candidate.name.casefold() == "playnite.fullscreenapp.exe" and candidate.is_file():
+            return candidate.resolve()
+    if explicit:
+        raise ValueError("Playnite.FullscreenApp.exe not found at --playnite path")
+    return None
+
+
+def merge_playnite(document, executable):
+    manual = [app for app in document["apps"] if app.get(LAUNCHER_MARKER) != "playnite"]
+    represented = any("playnite" in app.get("name", "").casefold() or
+                      "playnite." in (str(app.get("cmd", "")) + " ".join(app.get("detached", []))).casefold()
+                      for app in manual)
+    if executable and not represented:
+        command = str(executable)
+        if any(character in command for character in ('"', '\r', '\n')):
+            raise ValueError("Invalid Playnite executable path")
+        manual.append({"name": "Playnite", LAUNCHER_MARKER: "playnite",
+                       "cmd": f'"{command}"', "auto-detach": True, "wait-all": False,
+                       "image-path": "desktop.png"})
+    return {**document, "apps": manual}
 
 
 def parse_vdf(text: str) -> dict:
@@ -214,17 +270,25 @@ def safe_reload(apps: Path, checksum: str):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--steam", type=Path)
+    parser.add_argument("--playnite", type=Path, help="Optional portable Playnite directory or fullscreen executable")
     parser.add_argument("--apps", type=Path, default=Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Sunshine/config/apps.json")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--safe-reload", action="store_true")
     args = parser.parse_args()
-    root = args.steam or steam_root()
-    games, warnings = scan_games(root)
+    try:
+        root = args.steam or steam_root()
+        games, warnings = scan_games(root)
+    except RuntimeError as error:
+        if args.steam:
+            raise
+        root = None
+        games, warnings = [], [str(error)]
     document = json.loads(args.apps.read_text(encoding="utf-8-sig"))
     covers = {g["appid"]: cover_for(root, g["appid"], args.apps.parent / "moonlight-steam-covers")
-              for g in games} if args.apply and not args.dry_run else {}
+              for g in games} if root and args.apply and not args.dry_run else {}
     merged = merge_apps(document, games, covers, prune=not warnings)
+    merged = merge_playnite(merged, find_playnite(args.playnite))
     print(json.dumps({"games": games, "warnings": warnings, "applications": len(merged["apps"])}, ensure_ascii=False, indent=2))
     if args.apply and not args.dry_run:
         data = (json.dumps(merged, ensure_ascii=False, indent=2) + "\n").encode("utf-8")

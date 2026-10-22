@@ -15,6 +15,10 @@ void log_shutdown(void);
 void log_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void log_vprintf(const char *fmt, va_list ap);
 
+// Async-signal-safe one-line marker for teardown/exit paths.
+// Raw open/write/close of the log file; safe from signal handlers.
+void log_signal_marker(const char *msg);
+
 void log_notify(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 #define LOGI(fmt, ...) log_printf("[I] " fmt "\n", ##__VA_ARGS__)

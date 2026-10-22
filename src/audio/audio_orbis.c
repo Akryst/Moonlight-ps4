@@ -14,7 +14,7 @@
 // sceAudioOut works with fixed sample grains; 256 is the minimum
 // (5.33 ms at 48 kHz), closest to Moonlight's Opus frame (240, 5 ms).
 #define AUDIO_GRAIN 256
-#define MAX_CHANNELS 2
+#define MAX_DECODE_CHANNELS 8 /* stereo, 5.1 (6); 7.1 headroom */
 // Cap on queued PCM before drop: ~32 ms. If output stalls
 // we prefer dropping audio over accumulating latency.
 #define RING_SAMPLES (AUDIO_GRAIN * 6)
@@ -22,29 +22,41 @@
 // OpenOrbis: 0x8026000E = ORBIS_AUDIO_OUT_ERROR_ALREADY_INIT
 #define AUDIO_OUT_ALREADY_INIT 0x8026000Eu
 
+/* PS4 SDK: 8-channel S16 (7.1 layout FL FR FC LFE BL BR SL SR). The
+ * OpenOrbis header stops at stereo, so spell the known value out. */
+#ifndef ORBIS_AUDIO_OUT_PARAM_FORMAT_S16_8CH
+#define ORBIS_AUDIO_OUT_PARAM_FORMAT_S16_8CH 2
+#endif
+
 static OpusMSDecoder *s_decoder;
-static int s_channels;
+static int s_decode_channels; /* channels the Opus stream decodes to */
+static int s_out_channels;    /* channels sceAudioOut was opened with */
 static int s_samples_per_frame;
 static int32_t s_handle = -1;
 
-// Interleaved PCM ring buffer.
-static short s_ring[RING_SAMPLES * MAX_CHANNELS];
+// Interleaved PCM ring buffer (output layout).
+static short s_ring[RING_SAMPLES * MAX_DECODE_CHANNELS];
 static int s_ring_head; // read sample index
 static int s_ring_tail; // write sample index
 static int s_ring_count;
 
-static short s_outbuf[AUDIO_GRAIN * MAX_CHANNELS];
-static short s_decbuf[512 * MAX_CHANNELS];
+static short s_outbuf[AUDIO_GRAIN * MAX_DECODE_CHANNELS];
+static short s_decbuf[512 * MAX_DECODE_CHANNELS];
+
+static void ar_cleanup(void);
 
 static int ar_init(int audioConfiguration, const POPUS_MULTISTREAM_CONFIGURATION opusConfig,
                    void *context, int arFlags) {
     (void)audioConfiguration; (void)context; (void)arFlags;
     int rc;
     uint32_t rate;
+    ar_cleanup();
+    if(!opusConfig || opusConfig->samplesPerFrame<1 || opusConfig->samplesPerFrame>512)return -1;
 
-    s_channels = opusConfig->channelCount;
-    if (s_channels > MAX_CHANNELS) {
-        LOGE("audio: %d channels unsupported (max %d)", s_channels, MAX_CHANNELS);
+    s_decode_channels = opusConfig->channelCount;
+    if (s_decode_channels!=1 && s_decode_channels!=2 && s_decode_channels!=6) {
+        LOGE("audio: %d channels unsupported (max %d)",
+             s_decode_channels, MAX_DECODE_CHANNELS);
         return -1;
     }
     s_samples_per_frame = opusConfig->samplesPerFrame;
@@ -72,7 +84,7 @@ static int ar_init(int audioConfiguration, const POPUS_MULTISTREAM_CONFIGURATION
     rc = sceAudioOutInit();
     if (rc != 0 && (uint32_t)rc != AUDIO_OUT_ALREADY_INIT) {
         LOGE("audio: sceAudioOutInit failed: 0x%08x", (unsigned)rc);
-        return -1;
+        ar_cleanup();return -1;
     }
     LOGI("audio: sceAudioOutInit => 0x%08x", (unsigned)rc);
 
@@ -81,27 +93,57 @@ static int ar_init(int audioConfiguration, const POPUS_MULTISTREAM_CONFIGURATION
     if (sceUserServiceGetInitialUser(&initial) == 0 && initial > 0)
         user = initial;
 
-    uint32_t fmt = (s_channels == 1) ? ORBIS_AUDIO_OUT_PARAM_FORMAT_S16_MONO
-                                     : ORBIS_AUDIO_OUT_PARAM_FORMAT_S16_STEREO;
-
-    s_handle = sceAudioOutOpen(user, ORBIS_AUDIO_OUT_PORT_TYPE_MAIN, 0,
-                               AUDIO_GRAIN, rate, fmt);
-    if (s_handle <= 0) {
-        // Typical homebrew fallback: user SYSTEM (0xFF).
-        LOGW("audio: Open user=%d failed 0x%08x; retry SYSTEM",
-             (int)user, (unsigned)s_handle);
-        s_handle = sceAudioOutOpen(ORBIS_USER_SERVICE_USER_ID_SYSTEM,
-                                   ORBIS_AUDIO_OUT_PORT_TYPE_MAIN, 0,
-                                   AUDIO_GRAIN, rate, fmt);
+    /* 5.1 support. Moonlight decodes 5.1 to FL FR FC LFE BL BR -
+     * exactly the first six slots of the PS4 8-channel S16 layout - so
+     * the two surround pairs line up with a plain channel expand (last
+     * two slots silent). If the 8ch port open fails (TV stereo-only
+     * setups, odd HDMI negotiations), fall back to a classic 5.1->2.0
+     * downmix so audio keeps playing instead of going silent. */
+    s_out_channels = s_decode_channels;
+    if (s_decode_channels == 6) {
+        int32_t h8 = sceAudioOutOpen(user, ORBIS_AUDIO_OUT_PORT_TYPE_MAIN, 0,
+                                     AUDIO_GRAIN, rate,
+                                     ORBIS_AUDIO_OUT_PARAM_FORMAT_S16_8CH);
+        if (h8 <= 0 && user != ORBIS_USER_SERVICE_USER_ID_SYSTEM) {
+            h8 = sceAudioOutOpen(ORBIS_USER_SERVICE_USER_ID_SYSTEM,
+                                 ORBIS_AUDIO_OUT_PORT_TYPE_MAIN, 0,
+                                 AUDIO_GRAIN, rate,
+                                 ORBIS_AUDIO_OUT_PARAM_FORMAT_S16_8CH);
+        }
+        if (h8 > 0) {
+            s_handle = h8;
+            s_out_channels = 8;
+            LOGI("audio: 5.1 stream -> 8ch port (handle=%d)", (int)h8);
+        } else {
+            LOGW("audio: 8ch open failed 0x%08x; 5.1 downmix to stereo",
+                 (unsigned)h8);
+            s_out_channels = 2;
+        }
     }
+
     if (s_handle <= 0) {
-        LOGE("audio: sceAudioOutOpen failed: 0x%08x", (unsigned)s_handle);
-        return -1;
+        uint32_t fmt = (s_out_channels == 1) ? ORBIS_AUDIO_OUT_PARAM_FORMAT_S16_MONO
+                                             : ORBIS_AUDIO_OUT_PARAM_FORMAT_S16_STEREO;
+        s_handle = sceAudioOutOpen(user, ORBIS_AUDIO_OUT_PORT_TYPE_MAIN, 0,
+                                   AUDIO_GRAIN, rate, fmt);
+        if (s_handle <= 0) {
+            // Typical homebrew fallback: user SYSTEM (0xFF).
+            LOGW("audio: Open user=%d failed 0x%08x; retry SYSTEM",
+                 (int)user, (unsigned)s_handle);
+            s_handle = sceAudioOutOpen(ORBIS_USER_SERVICE_USER_ID_SYSTEM,
+                                       ORBIS_AUDIO_OUT_PORT_TYPE_MAIN, 0,
+                                       AUDIO_GRAIN, rate, fmt);
+        }
+        if (s_handle <= 0) {
+            LOGE("audio: sceAudioOutOpen failed: 0x%08x",
+                 (unsigned)s_handle);
+            ar_cleanup();return -1;
+        }
     }
 
     s_ring_head = s_ring_tail = s_ring_count = 0;
-    LOGI("audio: handle=%d %u Hz, %d channels, grain %d",
-         (int)s_handle, rate, s_channels, AUDIO_GRAIN);
+    LOGI("audio: handle=%d %u Hz, decode %d ch -> out %d ch, grain %d",
+         (int)s_handle, rate, s_decode_channels, s_out_channels, AUDIO_GRAIN);
     return 0;
 }
 
@@ -125,8 +167,8 @@ static void ring_push(const short *pcm, int samples) {
         s_ring_count -= drop;
     }
     for (int i = 0; i < samples; i++) {
-        memcpy(&s_ring[s_ring_tail * s_channels], &pcm[i * s_channels],
-               (size_t)s_channels * sizeof(short));
+        memcpy(&s_ring[s_ring_tail * s_out_channels], &pcm[i * s_out_channels],
+               (size_t)s_out_channels * sizeof(short));
         s_ring_tail = (s_ring_tail + 1) % RING_SAMPLES;
     }
     s_ring_count += samples;
@@ -134,11 +176,60 @@ static void ring_push(const short *pcm, int samples) {
 
 static void ring_pop(short *out, int samples) {
     for (int i = 0; i < samples; i++) {
-        memcpy(&out[i * s_channels], &s_ring[s_ring_head * s_channels],
-               (size_t)s_channels * sizeof(short));
+        memcpy(&out[i * s_out_channels], &s_ring[s_ring_head * s_out_channels],
+               (size_t)s_out_channels * sizeof(short));
         s_ring_head = (s_ring_head + 1) % RING_SAMPLES;
     }
     s_ring_count -= samples;
+}
+
+/* Convert one decoded frame (s_decode_channels interleaved) into the
+ * output layout and queue it in the ring (s_out_channels interleaved). */
+static void push_decoded(const short *pcm, int samples) {
+    if (s_out_channels == s_decode_channels) {
+        ring_push(pcm, samples);
+        return;
+    }
+    if (s_out_channels == 8 && s_decode_channels == 6) {
+        /* FL FR FC LFE BL BR -> FL FR FC LFE BL BR (sil) (sil). */
+        if (s_ring_count + samples > RING_SAMPLES) {
+            int drop = s_ring_count + samples - RING_SAMPLES;
+            s_ring_head = (s_ring_head + drop) % RING_SAMPLES;
+            s_ring_count -= drop;
+        }
+        for (int i = 0; i < samples; i++) {
+            short *dst = &s_ring[s_ring_tail * 8];
+            memcpy(dst, &pcm[i * 6], 6 * sizeof(short));
+            dst[6] = 0;
+            dst[7] = 0;
+            s_ring_tail = (s_ring_tail + 1) % RING_SAMPLES;
+        }
+        s_ring_count += samples;
+        return;
+    }
+    if (s_out_channels == 2 && s_decode_channels == 6) {
+        /* Classic 5.1 -> stereo downmix:
+         * L = FL + 0.707*FC + 0.707*BL, R = FR + 0.707*FC + 0.707*BR,
+         * LFE dropped. Fixed-point (181/256 ~ 0.707), clamped. */
+        if (s_ring_count + samples > RING_SAMPLES) {
+            int drop = s_ring_count + samples - RING_SAMPLES;
+            s_ring_head = (s_ring_head + drop) % RING_SAMPLES;
+            s_ring_count -= drop;
+        }
+        for (int i = 0; i < samples; i++) {
+            const short *s6 = &pcm[i * 6];
+            int l = s6[0] + ((s6[2] * 181) >> 8) + ((s6[4] * 181) >> 8);
+            int r = s6[1] + ((s6[2] * 181) >> 8) + ((s6[5] * 181) >> 8);
+            short *dst = &s_ring[s_ring_tail * 2];
+            dst[0] = (short)(l > 32767 ? 32767 : l < -32768 ? -32768 : l);
+            dst[1] = (short)(r > 32767 ? 32767 : r < -32768 ? -32768 : r);
+            s_ring_tail = (s_ring_tail + 1) % RING_SAMPLES;
+        }
+        s_ring_count += samples;
+        return;
+    }
+    LOGW("audio: unhandled layout %d -> %d", s_decode_channels,
+         s_out_channels);
 }
 
 // Called from the moonlight-common-c audio thread (without DIRECT_SUBMIT).
@@ -156,7 +247,7 @@ static void ar_decode_and_play(char *sampleData, int sampleLength) {
         return;
     }
 
-    ring_push(s_decbuf, decoded);
+    push_decoded(s_decbuf, decoded);
 
     while (s_ring_count >= AUDIO_GRAIN) {
         ring_pop(s_outbuf, AUDIO_GRAIN);

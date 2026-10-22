@@ -13,4 +13,6 @@
 #define GS_NOT_SUPPORTED_MODE -8
 #define GS_ERROR              -9
 
-extern const char *gs_error;
+const char **gs_error_slot(void);
+char *gs_error_buffer(void);
+#define gs_error (*gs_error_slot())

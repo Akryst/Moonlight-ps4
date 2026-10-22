@@ -14,5 +14,5 @@ fi
 clang -D_DEFAULT_SOURCE -std=c11 -O1 -g -ffunction-sections -fdata-sections \
     -fsanitize=address,undefined -Ithird_party/moonlight-common-c/src \
     -Ithird_party/mbedtls/include tests/render_ui.c src/ui/ui_draw.c \
-    src/ui/ui_theme.c src/ui/ui_art.c -Wl,--gc-sections -lm -o build-tests/render_ui
+    src/ui/ui_theme.c src/ui/ui_art.c src/config.c -pthread -Wl,--gc-sections -lm -o build-tests/render_ui
 build-tests/render_ui

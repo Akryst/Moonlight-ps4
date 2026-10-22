@@ -42,6 +42,9 @@ typedef struct {
     unsigned convert_us;
     unsigned present_us;
     unsigned bytes;
+    unsigned net_recv_us;  /* enqueue-receive spread of the frame */
+    unsigned host_dms;     /* Sunshine-reported host latency, 1/10 ms */
+    int      host_valid;   /* at least one frame in this sample had data */
 } live_sample_t;
 
 static live_sample_t s_ring[VIDEO_STATS_HISTORY];
@@ -50,6 +53,9 @@ static int s_ring_count;
 static unsigned long long s_pending_decode_us;
 static unsigned long long s_pending_bytes;
 static unsigned long long s_pending_bounce_us;
+static unsigned long long s_pending_net_recv_us;
+static unsigned long long s_pending_host_dms;
+static unsigned s_pending_host_frames;
 static pthread_mutex_t s_live_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void video_stats_add(unsigned long long decode_us, unsigned long long convert_us,
@@ -76,8 +82,14 @@ void video_stats_add(unsigned long long decode_us, unsigned long long convert_us
     s_pending_bounce_us = 0;
     s->present_us = (unsigned)present_us;
     s->bytes = (unsigned)s_pending_bytes;
+    s->net_recv_us = (unsigned)s_pending_net_recv_us;
+    s->host_dms = (unsigned)s_pending_host_dms;
+    s->host_valid = s_pending_host_frames > 0 ? 1 : 0;
     s_pending_decode_us = 0;
     s_pending_bytes = 0;
+    s_pending_net_recv_us = 0;
+    s_pending_host_dms = 0;
+    s_pending_host_frames = 0;
     s_ring_head = (s_ring_head + 1) % VIDEO_STATS_HISTORY;
     if (s_ring_count < VIDEO_STATS_HISTORY)
         s_ring_count++;
@@ -116,6 +128,23 @@ void video_stats_add_au(unsigned long long au_us, unsigned long long au_bytes) {
     pthread_mutex_unlock(&s_live_lock);
 }
 
+/* network metrics straight out of the DECODE_UNIT. recv_us is the
+ * wire spread of the frame (enqueue minus first-packet receive), host_dms
+ * is the host-side frame latency Sunshine reports (1/10 ms; 0 = none).
+ * Averaged per presented frame in the live ring. */
+void video_stats_add_net(unsigned long long full_length, unsigned long long recv_us,
+                          unsigned long long host_dms) {
+    (void)full_length; /* bytes come via add_au (AU staging path); kept in
+                         the signature so decoders pass du->fullLength once */
+    pthread_mutex_lock(&s_live_lock);
+    s_pending_net_recv_us += recv_us;
+    if (host_dms) {
+        s_pending_host_dms += host_dms;
+        s_pending_host_frames++;
+    }
+    pthread_mutex_unlock(&s_live_lock);
+}
+
 void video_stats_get_live(video_live_stats_t *out) {
     memset(out, 0, sizeof(*out));
     pthread_mutex_lock(&s_live_lock);
@@ -130,6 +159,8 @@ void video_stats_get_live(video_live_stats_t *out) {
     uint64_t window_start = (current_ts > window_us) ? current_ts - window_us : 0;
 
     unsigned long long sum_decode = 0, sum_convert = 0, sum_present = 0, sum_bytes = 0;
+    unsigned long long sum_recv = 0, sum_host = 0;
+    int host_frames = 0;
     int win_count = 0;
     uint64_t first_ts_in_window = current_ts;
     int out_n = 0;
@@ -149,6 +180,11 @@ void video_stats_get_live(video_live_stats_t *out) {
             sum_convert += s->convert_us;
             sum_present += s->present_us;
             sum_bytes += s->bytes;
+            sum_recv += s->net_recv_us;
+            if (s->host_valid) {
+                sum_host += s->host_dms;
+                host_frames++;
+            }
             win_count++;
         }
     }
@@ -163,6 +199,12 @@ void video_stats_get_live(video_live_stats_t *out) {
         out->convert_ms = (float)((double)sum_convert / win_count / 1000.0);
         out->present_ms = (float)((double)sum_present / win_count / 1000.0);
         out->kb_per_frame = (float)((double)sum_bytes / win_count / 1024.0);
+        /* Network line: recv spread is per-frame; host latency is
+         * averaged over the frames that reported one. RX bitrate is the
+         * encoded-video volume over the wall-clock window. */
+        out->net_recv_ms = (float)((double)sum_recv / win_count / 1000.0);
+        out->host_ms = host_frames ? (float)((double)sum_host / host_frames / 10.0) : 0.0f;
+        out->rx_mbps = (float)((double)sum_bytes * 8.0 / win_s / 1000000.0);
     }
     pthread_mutex_unlock(&s_live_lock);
 }
@@ -174,6 +216,8 @@ void video_stats_begin_session(void) {
     memset(s_ring, 0, sizeof(s_ring));
     s_ring_head = s_ring_count = 0;
     s_pending_decode_us = s_pending_bytes = s_pending_bounce_us = 0;
+    s_pending_net_recv_us = s_pending_host_dms = 0;
+    s_pending_host_frames = 0;
     pthread_mutex_unlock(&s_live_lock);
 }
 
